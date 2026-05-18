@@ -53,7 +53,7 @@ impl CsrFile {
     pub fn mie(&self)     -> u64 { self.regs[CSR_MIE] }
     pub fn mip(&self)     -> u64 { self.regs[CSR_MIP] }
 
-    pub fn set_mip_timer(&mut self)   { self.regs[CSR_MIP] |=  (1 << 7); }
+    pub fn set_mip_timer(&mut self)   { self.regs[CSR_MIP] |=  1 << 7; }
     pub fn clear_mip_timer(&mut self) { self.regs[CSR_MIP] &= !(1 << 7); }
 
     pub fn inc_cycle(&mut self)   { self.regs[CSR_CYCLE]   += 1; }

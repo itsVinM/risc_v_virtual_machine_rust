@@ -61,4 +61,9 @@ impl Memory {
         let i = self.off(addr)?;
         if i + len <= self.data.len() { Some(&self.data[i..i+len]) } else { None }
     }
+
+    pub fn into_dram(mut data: Vec<u8>) -> Self {
+        data.resize(DRAM_SIZE as usize, 0);
+        Self { data }
+    }
 }

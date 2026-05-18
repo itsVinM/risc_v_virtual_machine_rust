@@ -1,3 +1,5 @@
+extern crate alloc;
+use alloc::vec::Vec;
 use crate::memory::Memory;
 use crate::devices::{Device, timer::Clint, plic::Plic};
 use crate::traps::TrapCause;
@@ -20,6 +22,14 @@ impl Bus {
     pub fn new(binary: &[u8]) -> Self {
         Self {
             dram:  Memory::load_binary(binary),
+            clint: Clint::new(),
+            plic:  Plic::new(),
+        }
+    }
+
+    pub fn from_dram(data: Vec<u8>) -> Self {
+        Self {
+            dram:  Memory::into_dram(data),
             clint: Clint::new(),
             plic:  Plic::new(),
         }

@@ -1,9 +1,47 @@
 use std::{env, fs, io::{self, BufRead, Write}};
 use riscv_core::{Bus, Cpu};
 use riscv_core::cpu::StepResult;
-use riscv_core::bus::DRAM_BASE;
+use riscv_core::bus::{DRAM_BASE, DRAM_END};
 use riscv_core::debug::disasm::disassemble;
 use riscv_core::traps::TrapCause;
+
+// ─── ELF64 loader ─────────────────────────────────────────────────────────
+
+fn load_file(bytes: &[u8]) -> (Bus, u64) {
+    let is_elf = bytes.len() >= 4 && bytes[0..4] == [0x7f, b'E', b'L', b'F'];
+    if is_elf {
+        if let Some((flat, entry)) = load_elf(bytes) {
+            return (Bus::from_dram(flat), entry);
+        }
+        eprintln!("warning: malformed ELF, falling back to flat binary");
+    }
+    (Bus::new(bytes), DRAM_BASE)
+}
+
+fn load_elf(b: &[u8]) -> Option<(Vec<u8>, u64)> {
+    if *b.get(4)? != 2 { return None; } // ELF64 only
+    let entry   = u64::from_le_bytes(b.get(24..32)?.try_into().ok()?);
+    let phoff   = u64::from_le_bytes(b.get(32..40)?.try_into().ok()?) as usize;
+    let phentsz = u16::from_le_bytes(b.get(54..56)?.try_into().ok()?) as usize;
+    let phnum   = u16::from_le_bytes(b.get(56..58)?.try_into().ok()?) as usize;
+
+    let dram_size = (DRAM_END - DRAM_BASE) as usize;
+    let mut flat = vec![0u8; dram_size];
+
+    for i in 0..phnum {
+        let ph = phoff + i * phentsz;
+        let ptype  = u32::from_le_bytes(b.get(ph..ph+4)?.try_into().ok()?);
+        if ptype != 1 { continue; } // PT_LOAD only
+        let foff   = u64::from_le_bytes(b.get(ph+8..ph+16)?.try_into().ok()?) as usize;
+        let paddr  = u64::from_le_bytes(b.get(ph+24..ph+32)?.try_into().ok()?);
+        let filesz = u64::from_le_bytes(b.get(ph+32..ph+40)?.try_into().ok()?) as usize;
+        if paddr < DRAM_BASE || paddr >= DRAM_END { continue; }
+        let off = (paddr - DRAM_BASE) as usize;
+        if off + filesz > dram_size { continue; }
+        flat[off..off+filesz].copy_from_slice(b.get(foff..foff+filesz)?);
+    }
+    Some((flat, entry))
+}
 
 // ANSI escape helpers
 const CLR: &str = "\x1b[2J\x1b[H";
@@ -193,16 +231,18 @@ fn main() {
     ];
     let demo: Vec<u8> = demo_words.iter().flat_map(|w| w.to_le_bytes()).collect();
 
-    let binary = match path {
-        Some(p) => fs::read(p).unwrap_or_else(|e| { eprintln!("error: {e}"); std::process::exit(1); }),
+    let (mut bus, entry) = match path {
+        Some(p) => {
+            let bytes = fs::read(p).unwrap_or_else(|e| { eprintln!("error: {e}"); std::process::exit(1); });
+            load_file(&bytes)
+        }
         None    => {
             println!("no binary supplied — running built-in demo: fib(10)");
-            demo
+            (Bus::new(&demo), DRAM_BASE)
         }
     };
 
-    let mut bus = Bus::new(&binary);
-    let mut cpu = Cpu::new(DRAM_BASE);
+    let mut cpu = Cpu::new(entry);
 
     if debug { run_debugger(&mut cpu, &mut bus); }
     else     { run_headless(&mut cpu, &mut bus); }

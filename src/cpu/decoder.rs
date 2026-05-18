@@ -210,6 +210,7 @@ pub fn decode(raw: u32) -> Inst {
             0x0 => match raw {
                 0x0000_0073 => Inst::Ecall,
                 0x0010_0073 => Inst::Ebreak,
+                0x1050_0073 => Inst::Fence,  // WFI — no-op on single core
                 0x3020_0073 => Inst::Mret,
                 _ => Inst::Illegal(raw),
             },
