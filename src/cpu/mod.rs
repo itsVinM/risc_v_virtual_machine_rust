@@ -2,7 +2,7 @@ pub mod csr;
 pub mod decoder;
 pub mod executor;
 
-use crate::bus::Bus;
+use crate::mmu::Mmu as Bus;
 use crate::traps::{TrapCause, pending_interrupt, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP};
 use csr::{CsrFile, CSR_MSTATUS, CSR_MEPC, CSR_MCAUSE, CSR_MTVAL, CSR_MTVEC};
 use decoder::decode;
@@ -26,7 +26,7 @@ impl Cpu {
     pub fn new(entry: u64) -> Self {
         let mut regs = [0u64; 32];
         // sp at top of DRAM
-        regs[2] = crate::bus::DRAM_END;
+        regs[2] = crate::mmu::DRAM_END;
         Self { regs, pc: entry, csr: CsrFile::new(), halted: false }
     }
 

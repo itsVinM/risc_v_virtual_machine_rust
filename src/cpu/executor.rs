@@ -1,6 +1,6 @@
 use crate::cpu::decoder::Inst;
 use crate::cpu::csr::{CsrFile, CsrOp};
-use crate::bus::Bus;
+use crate::mmu::Mmu as Bus;
 use crate::traps::TrapCause;
 
 // Sign-extend a 32-bit value to 64 bits

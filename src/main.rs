@@ -1,21 +1,28 @@
-use std::{env, fs, io::{self, BufRead, Write}};
-use riscv_core::{Bus, Cpu};
-use riscv_core::cpu::StepResult;
-use riscv_core::bus::{DRAM_BASE, DRAM_END};
-use riscv_core::debug::disasm::disassemble;
-use riscv_core::traps::TrapCause;
+mod cpu;
+mod debug;
+mod mmu;
+mod traps;
 
-// ─── ELF64 loader ─────────────────────────────────────────────────────────
+use std::{env, fs, io::{self, BufRead, Write}};
+use mmu::{Mmu, DRAM_BASE, DRAM_END};
+use cpu::{Cpu, StepResult};
+
+type Bus = Mmu;
+use cpu::csr::{CSR_CYCLE, CSR_INSTRET};
+use debug::disasm::disassemble;
+use traps::TrapCause;
+
+// ── ELF64 loader ──────────────────────────────────────────────────────────────
 
 fn load_file(bytes: &[u8]) -> (Bus, u64) {
     let is_elf = bytes.len() >= 4 && bytes[0..4] == [0x7f, b'E', b'L', b'F'];
     if is_elf {
         if let Some((flat, entry)) = load_elf(bytes) {
-            return (Bus::from_dram(flat), entry);
+            return (Mmu::from_dram(flat), entry);
         }
         eprintln!("warning: malformed ELF, falling back to flat binary");
     }
-    (Bus::new(bytes), DRAM_BASE)
+    (Mmu::new(bytes), DRAM_BASE)
 }
 
 fn load_elf(b: &[u8]) -> Option<(Vec<u8>, u64)> {
@@ -43,7 +50,7 @@ fn load_elf(b: &[u8]) -> Option<(Vec<u8>, u64)> {
     Some((flat, entry))
 }
 
-// ANSI escape helpers
+// ── ANSI helpers ──────────────────────────────────────────────────────────────
 const CLR: &str = "\x1b[2J\x1b[H";
 const DIM: &str = "\x1b[2m";
 const RST: &str = "\x1b[0m";
@@ -54,7 +61,6 @@ const CYN: &str = "\x1b[36m";
 
 fn print_state(cpu: &Cpu, bus: &Bus, bps: &[u64]) {
     print!("{CLR}");
-
     println!("{CYN}── registers ────────────────────────────────────────────────────────{RST}");
     for i in 0..32usize {
         let v = cpu.regs[i];
@@ -62,7 +68,6 @@ fn print_state(cpu: &Cpu, bus: &Bus, bps: &[u64]) {
         print!("{color}{:>4}:{RST} {:#018x}  ", Cpu::reg_name(i), v);
         if i % 4 == 3 { println!(); }
     }
-
     println!("\n{CYN}── disassembly ──────────────────────────────────────────────────────{RST}");
     for offset in -3i64..=3 {
         let addr = cpu.pc.wrapping_add((offset * 4) as u64);
@@ -78,13 +83,11 @@ fn print_state(cpu: &Cpu, bus: &Bus, bps: &[u64]) {
         };
         println!("{color}{arrow} {addr:#010x}: {raw:08x}  {asm}{RST}");
     }
-
-    let cycle   = cpu.csr.read(riscv_core::cpu::csr::CSR_CYCLE);
-    let instret = cpu.csr.read(riscv_core::cpu::csr::CSR_INSTRET);
+    let cycle   = cpu.csr.read(CSR_CYCLE);
+    let instret = cpu.csr.read(CSR_INSTRET);
     println!("\n{CYN}── status ───────────────────────────────────────────────────────────{RST}");
     println!("  halted={:<5}  breakpoints={}  cycle={}  instret={}",
         cpu.halted, bps.len(), cycle, instret);
-
     if !bps.is_empty() {
         let bp_list: Vec<String> = bps.iter().map(|a| format!("{a:#010x}")).collect();
         println!("  breakpoints: {}", bp_list.join("  "));
@@ -100,7 +103,7 @@ fn prompt(bps: &[u64]) -> String {
     line.trim().to_string()
 }
 
-// ─── VM helpers ───────────────────────────────────────────────────────────
+// ── VM helpers ────────────────────────────────────────────────────────────────
 
 fn vm_tick(cpu: &mut Cpu, bus: &mut Bus) -> StepResult {
     if bus.clint.timer_pending() { cpu.csr.set_mip_timer(); }
@@ -112,7 +115,6 @@ fn vm_tick(cpu: &mut Cpu, bus: &mut Bus) -> StepResult {
         if cpu.regs[17] == 93 { return StepResult::Halted; } // SYS_exit
         cpu.pc = cpu.pc.wrapping_add(4);
     }
-
     r
 }
 
@@ -126,31 +128,24 @@ fn run_until(cpu: &mut Cpu, bus: &mut Bus, bps: &[u64], n: Option<u64>) -> StepR
     StepResult::Ok
 }
 
-// ─── Debugger loop ────────────────────────────────────────────────────────
+// ── Debugger ──────────────────────────────────────────────────────────────────
 
 fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
     let mut bps: Vec<u64> = Vec::new();
-
     println!("{CYN}RISC-V64 live debugger{RST}");
     println!("commands: s  step   r <n>  run n steps   c  continue");
     println!("          b <hex>  toggle breakpoint     q  quit");
 
     loop {
         print_state(cpu, bus, &bps);
-
-        if cpu.halted {
-            println!("{YLW}VM halted.{RST}");
-            break;
-        }
+        if cpu.halted { println!("{YLW}VM halted.{RST}"); break; }
 
         let cmd = prompt(&bps);
         let mut parts = cmd.splitn(2, ' ');
         match parts.next().unwrap_or("") {
             "s" | "" => { vm_tick(cpu, bus); }
             "r" => {
-                let n: u64 = parts.next()
-                    .and_then(|s| s.trim().parse().ok())
-                    .unwrap_or(100);
+                let n: u64 = parts.next().and_then(|s| s.trim().parse().ok()).unwrap_or(100);
                 let r = run_until(cpu, bus, &bps, Some(n));
                 if matches!(r, StepResult::Halted) { cpu.halted = true; }
             }
@@ -171,11 +166,8 @@ fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
                     }
                 } else {
                     let pc = cpu.pc;
-                    if let Some(pos) = bps.iter().position(|&a| a == pc) {
-                        bps.remove(pos);
-                    } else {
-                        bps.push(pc);
-                    }
+                    if let Some(pos) = bps.iter().position(|&a| a == pc) { bps.remove(pos); }
+                    else { bps.push(pc); }
                 }
             }
             "q" | "quit" => break,
@@ -186,15 +178,14 @@ fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
     }
 }
 
-// ─── Headless run ─────────────────────────────────────────────────────────
+// ── Headless run ──────────────────────────────────────────────────────────────
 
 fn run_headless(cpu: &mut Cpu, bus: &mut Bus) {
     loop {
         match vm_tick(cpu, bus) {
             StepResult::Halted => {
                 println!("halted  pc={:#010x}  a0={}  cycles={}",
-                    cpu.pc, cpu.regs[10] as i64,
-                    cpu.csr.read(riscv_core::cpu::csr::CSR_CYCLE));
+                    cpu.pc, cpu.regs[10] as i64, cpu.csr.read(CSR_CYCLE));
                 break;
             }
             StepResult::Trap(t) if !matches!(t, TrapCause::EcallFromM) => {
@@ -206,28 +197,17 @@ fn run_headless(cpu: &mut Cpu, bus: &mut Bus) {
     }
 }
 
-// ─── Entry point ──────────────────────────────────────────────────────────
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     let debug = args.contains(&"--debug".to_string()) || args.contains(&"-d".to_string());
     let path  = args.iter().find(|a| !a.starts_with('-') && *a != &args[0]);
 
-    // Built-in demo: fib(10) = 55  (same program as integration_fibonacci test)
-    // x2=a, x3=b, x4=tmp, x5=i, x6=limit; a0 = result on ebreak
     let demo_words: &[u32] = &[
-        0x0000_0113, // addi x2, x0, 0     a = 0
-        0x0010_0193, // addi x3, x0, 1     b = 1
-        0x0000_0293, // addi x5, x0, 0     i = 0
-        0x00A0_0313, // addi x6, x0, 10    limit = 10
-        0x0062_8C63, // beq  x5, x6, +24   exit when i == 10
-        0x0031_0233, // add  x4, x2, x3    tmp = a + b
-        0x0001_8113, // addi x2, x3, 0     a = b
-        0x0002_0193, // addi x3, x4, 0     b = tmp
-        0x0012_8293, // addi x5, x5, 1     i++
-        0xFEDF_F06F, // jal  x0, -20       back to loop
-        0x0001_0513, // addi a0, x2, 0     a0 = result
-        0x0010_0073, // ebreak
+        0x0000_0113, 0x0010_0193, 0x0000_0293, 0x00A0_0313,
+        0x0062_8C63, 0x0031_0233, 0x0001_8113, 0x0002_0193,
+        0x0012_8293, 0xFEDF_F06F, 0x0001_0513, 0x0010_0073,
     ];
     let demo: Vec<u8> = demo_words.iter().flat_map(|w| w.to_le_bytes()).collect();
 
@@ -236,14 +216,13 @@ fn main() {
             let bytes = fs::read(p).unwrap_or_else(|e| { eprintln!("error: {e}"); std::process::exit(1); });
             load_file(&bytes)
         }
-        None    => {
+        None => {
             println!("no binary supplied — running built-in demo: fib(10)");
-            (Bus::new(&demo), DRAM_BASE)
+            (Mmu::new(&demo), DRAM_BASE)
         }
     };
 
     let mut cpu = Cpu::new(entry);
-
     if debug { run_debugger(&mut cpu, &mut bus); }
     else     { run_headless(&mut cpu, &mut bus); }
 }
