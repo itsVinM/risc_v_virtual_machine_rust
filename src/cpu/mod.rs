@@ -3,8 +3,7 @@ pub mod decoder;
 pub mod executor;
 
 use crate::bus::Bus;
-use crate::traps::{TrapCause, interrupts::pending_interrupt};
-use crate::traps::interrupts::{MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP};
+use crate::traps::{TrapCause, pending_interrupt, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP};
 use csr::{CsrFile, CSR_MSTATUS, CSR_MEPC, CSR_MCAUSE, CSR_MTVAL, CSR_MTVEC};
 use decoder::decode;
 use executor::execute;
@@ -39,21 +38,18 @@ impl Cpu {
 
         // Check pending interrupts
         if let Some(irq) = pending_interrupt(self.csr.mstatus(), self.csr.mie(), self.csr.mip()) {
-            self.handle_trap(irq, self.pc, 0, bus);
+            self.handle_trap(irq, self.pc, 0);
             return StepResult::Ok;
         }
 
         // Fetch
         let raw = match bus.read32(self.pc) {
             Ok(v)  => v,
-            Err(e) => { self.handle_trap(e, self.pc, self.pc, bus); return StepResult::Trap(e); }
+            Err(e) => { self.handle_trap(e, self.pc, self.pc); return StepResult::Trap(e); }
         };
 
-        // Decode
-        let inst = decode(raw);
-
-        // Execute
-        let result = execute(inst, self.pc, &mut self.regs, &mut self.csr, bus);
+        // Decode → Execute
+        let result = execute(decode(raw), self.pc, &mut self.regs, &mut self.csr, bus);
         self.csr.inc_instret();
 
         if result.halt {
@@ -62,7 +58,7 @@ impl Cpu {
         }
 
         if let Some(trap) = result.trap {
-            self.handle_trap(trap, self.pc, 0, bus);
+            self.handle_trap(trap, self.pc, 0);
             return StepResult::Trap(trap);
         }
 
@@ -71,7 +67,7 @@ impl Cpu {
         StepResult::Ok
     }
 
-    fn handle_trap(&mut self, cause: TrapCause, pc: u64, tval: u64, _bus: &mut Bus) {
+    fn handle_trap(&mut self, cause: TrapCause, pc: u64, tval: u64) {
         let code = cause.code();
         self.csr.write(CSR_MEPC, pc);
         self.csr.write(CSR_MCAUSE, code);

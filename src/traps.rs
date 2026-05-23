@@ -1,5 +1,4 @@
-pub mod interrupts;
-
+// ── Trap causes ───────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrapCause {
     // Exceptions
@@ -17,7 +16,7 @@ pub enum TrapCause {
     InstructionPageFault,
     LoadPageFault,
     StorePageFault,
-    // Interrupts
+    // Interrupts (bit 63 set in mcause)
     SoftwareInterrupt,
     TimerInterrupt,
     ExternalInterrupt,
@@ -49,4 +48,25 @@ impl TrapCause {
     pub fn is_interrupt(self) -> bool {
         matches!(self, Self::SoftwareInterrupt | Self::TimerInterrupt | Self::ExternalInterrupt)
     }
+}
+
+// ── mstatus / mie / mip bit masks ─────────────────────────────────────────────
+pub const MSTATUS_MIE:  u64 = 1 << 3;   // global interrupt enable
+pub const MSTATUS_MPIE: u64 = 1 << 7;   // previous interrupt enable (saved on trap)
+pub const MSTATUS_MPP:  u64 = 0b11 << 11; // previous privilege mode
+
+pub const MIE_MSIE: u64 = 1 << 3;  // machine software interrupt enable
+pub const MIE_MTIE: u64 = 1 << 7;  // machine timer interrupt enable
+pub const MIE_MEIE: u64 = 1 << 11; // machine external interrupt enable
+
+// ── Interrupt check ───────────────────────────────────────────────────────────
+// Called every step: returns the highest-priority pending+enabled interrupt,
+// or None if interrupts are globally disabled or nothing is pending.
+pub fn pending_interrupt(mstatus: u64, mie: u64, mip: u64) -> Option<TrapCause> {
+    if mstatus & MSTATUS_MIE == 0 { return None; }
+    let pending = mie & mip;
+    if pending & MIE_MEIE != 0 { return Some(TrapCause::ExternalInterrupt); }
+    if pending & MIE_MTIE != 0 { return Some(TrapCause::TimerInterrupt); }
+    if pending & MIE_MSIE != 0 { return Some(TrapCause::SoftwareInterrupt); }
+    None
 }

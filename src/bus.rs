@@ -1,10 +1,7 @@
-extern crate alloc;
-use alloc::vec::Vec;
-use crate::memory::Memory;
-use crate::devices::{Device, timer::Clint, plic::Plic};
+use crate::devices::{Clint, Device, Plic};
 use crate::traps::TrapCause;
 
-// Physical memory map
+// ── Memory map ────────────────────────────────────────────────────────────────
 pub const DRAM_BASE:  u64 = 0x8000_0000;
 pub const DRAM_END:   u64 = 0x8800_0000; // 128 MB
 pub const CLINT_BASE: u64 = 0x0200_0000;
@@ -12,28 +9,71 @@ pub const CLINT_END:  u64 = 0x020F_FFFF;
 pub const PLIC_BASE:  u64 = 0x0C00_0000;
 pub const PLIC_END:   u64 = 0x0FFF_FFFF;
 
+const DRAM_SIZE: u64 = 128 * 1024 * 1024;
+
+// ── DRAM ──────────────────────────────────────────────────────────────────────
+struct Memory {
+    data: Vec<u8>,
+}
+
+impl Memory {
+    fn new() -> Self {
+        Self { data: vec![0u8; DRAM_SIZE as usize] }
+    }
+
+    fn load_binary(bytes: &[u8]) -> Self {
+        let mut m = Self::new();
+        let len = bytes.len().min(DRAM_SIZE as usize);
+        m.data[..len].copy_from_slice(&bytes[..len]);
+        m
+    }
+
+    fn into_dram(mut data: Vec<u8>) -> Self {
+        data.resize(DRAM_SIZE as usize, 0);
+        Self { data }
+    }
+
+    #[inline(always)]
+    fn off(&self, addr: u64) -> Option<usize> {
+        if addr >= DRAM_BASE && addr < DRAM_BASE + DRAM_SIZE {
+            Some((addr - DRAM_BASE) as usize)
+        } else {
+            None
+        }
+    }
+
+    fn read8(&self,  addr: u64) -> Option<u8>  { Some(self.data[self.off(addr)?]) }
+    fn read32(&self, addr: u64) -> Option<u32> {
+        let i = self.off(addr)?;
+        Some(u32::from_le_bytes(self.data[i..i+4].try_into().ok()?))
+    }
+    fn read64(&self, addr: u64) -> Option<u64> {
+        let i = self.off(addr)?;
+        Some(u64::from_le_bytes(self.data[i..i+8].try_into().ok()?))
+    }
+
+    fn write8(&mut self,  addr: u64, v: u8)  { if let Some(i) = self.off(addr) { self.data[i] = v; } }
+    fn write32(&mut self, addr: u64, v: u32) { if let Some(i) = self.off(addr) { self.data[i..i+4].copy_from_slice(&v.to_le_bytes()); } }
+    fn write64(&mut self, addr: u64, v: u64) { if let Some(i) = self.off(addr) { self.data[i..i+8].copy_from_slice(&v.to_le_bytes()); } }
+}
+
+// ── Bus ───────────────────────────────────────────────────────────────────────
 pub struct Bus {
-    pub dram:  Memory,
+    dram:  Memory,
     pub clint: Clint,
     pub plic:  Plic,
 }
 
 impl Bus {
     pub fn new(binary: &[u8]) -> Self {
-        Self {
-            dram:  Memory::load_binary(binary),
-            clint: Clint::new(),
-            plic:  Plic::new(),
-        }
+        Self { dram: Memory::load_binary(binary), clint: Clint::new(), plic: Plic::new() }
     }
 
     pub fn from_dram(data: Vec<u8>) -> Self {
-        Self {
-            dram:  Memory::into_dram(data),
-            clint: Clint::new(),
-            plic:  Plic::new(),
-        }
+        Self { dram: Memory::into_dram(data), clint: Clint::new(), plic: Plic::new() }
     }
+
+    pub fn tick(&mut self) { self.clint.tick(); }
 
     pub fn read8(&self, addr: u64) -> Result<u8, TrapCause> {
         match addr {
@@ -104,6 +144,4 @@ impl Bus {
             }
         }
     }
-
-    pub fn tick(&mut self) { self.clint.tick(); }
 }

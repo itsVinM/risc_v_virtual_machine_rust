@@ -1,7 +1,4 @@
 use crate::cpu::decoder::{decode, Inst};
-extern crate alloc;
-use alloc::string::String;
-use alloc::format;
 
 pub fn disassemble(raw: u32) -> String {
     let inst = decode(raw);

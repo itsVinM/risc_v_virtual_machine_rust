@@ -1,16 +1,16 @@
-// CSR addresses (machine-mode subset)
-pub const CSR_MSTATUS:  usize = 0x300;
-pub const CSR_MISA:     usize = 0x301;
-pub const CSR_MIE:      usize = 0x304;
-pub const CSR_MTVEC:    usize = 0x305;
-pub const CSR_MSCRATCH: usize = 0x340;
-pub const CSR_MEPC:     usize = 0x341;
-pub const CSR_MCAUSE:   usize = 0x342;
-pub const CSR_MTVAL:    usize = 0x343;
-pub const CSR_MIP:      usize = 0x344;
-pub const CSR_CYCLE:    usize = 0xC00;
-pub const CSR_TIME:     usize = 0xC01;
-pub const CSR_INSTRET:  usize = 0xC02;
+// CSR addresses (machine-mode subset) — from RISC-V Privileged Spec Vol II
+pub const CSR_MSTATUS:  usize = 0x300; // global interrupt enable + privilege status bits
+pub const CSR_MISA:     usize = 0x301; // which ISA extensions are active (RV64IMAC)
+pub const CSR_MIE:      usize = 0x304; // interrupt enable mask — which interrupts to listen to
+pub const CSR_MTVEC:    usize = 0x305; // trap vector — address to jump to when interrupt/exception fires
+pub const CSR_MSCRATCH: usize = 0x340; // scratch register — free for OS use (e.g. save sp on trap entry)
+pub const CSR_MEPC:     usize = 0x341; // exception PC — address saved when trap fires, restored by mret
+pub const CSR_MCAUSE:   usize = 0x342; // trap cause — what triggered the trap (timer=0x8000...7, illegal=2)
+pub const CSR_MTVAL:    usize = 0x343; // trap value — extra info (e.g. faulting address or bad instruction)
+pub const CSR_MIP:      usize = 0x344; // interrupt pending — which interrupts are currently waiting
+pub const CSR_CYCLE:    usize = 0xC00; // read-only: CPU cycle counter
+pub const CSR_TIME:     usize = 0xC01; // read-only: shadow of mtime from CLINT
+pub const CSR_INSTRET:  usize = 0xC02; // read-only: instructions retired (executed) counter
 
 const NUM_CSRS: usize = 4096;
 
