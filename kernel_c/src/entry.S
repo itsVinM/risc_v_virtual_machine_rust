@@ -1,9 +1,10 @@
 .section .text.init
 .global _start
 
+
 _start:
     # set stack pointer to top of dram
-    li sp, 0x87FFFFF0
+    li sp, 0x87FFFFF0 
 
     #load trap handler address into t0 temp register
     la t0, _trap
@@ -41,16 +42,23 @@ _start:
 .global _trap
 
 _trap:
-    # save temp registers we will clobber
-    addi sp, sp, -24
-    sd t0, 0(sp)
-    sd t1, 8(sp)
-    sd t2, 16(sp)
+    # save all caller-saved registers (call clobbers ra, t0-t6, a0-a7)
+    addi sp, sp, -80
+    sd ra,  0(sp)
+    sd t0,  8(sp)
+    sd t1, 16(sp)
+    sd t2, 24(sp)
+    sd t3, 32(sp)
+    sd t4, 40(sp)
+    sd t5, 48(sp)
+    sd t6, 56(sp)
+    sd a0, 64(sp)
+    sd a1, 72(sp)
 
     # Re-arm timer for next interrupt
     li t0, 0x200BFF8    # MTIME address
     ld t1, 0(t0)        # read current time
-    li t2, 500  
+    li t2, 500
     add t1, t1, t2      # t1 = mtime + 500
     li t0, 0x2004000    # MTIMECMP address
     sd t1, 0(t0)        # write new mtimecmp
@@ -58,11 +66,18 @@ _trap:
     # call C handler function
     call handler_interrupt
 
-    # restore registers
-    ld t0, 0(sp)
-    ld t1, 8(sp)
-    ld t2, 16(sp)
-    addi sp, sp 24
+    # restore all caller-saved registers
+    ld ra,  0(sp)
+    ld t0,  8(sp)
+    ld t1, 16(sp)
+    ld t2, 24(sp)
+    ld t3, 32(sp)
+    ld t4, 40(sp)
+    ld t5, 48(sp)
+    ld t6, 56(sp)
+    ld a0, 64(sp)
+    ld a1, 72(sp)
+    addi sp, sp, 80
 
     # return from trap
     mret
