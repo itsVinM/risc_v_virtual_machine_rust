@@ -623,3 +623,246 @@ To run a real OS kernel:
 - **GDB RSP stub**: TCP socket at port 1234, `riscv64-unknown-elf-gdb` connects
 - **JIT compilation**: translate RISC-V basic blocks to host machine code
   for 10–100× speedup (see `rvjit`)
+
+---
+
+## 17. Rapita Systems interview prep — RISC-V deep knowledge
+
+Role: Multicore Hardware Analysis Engineer in Aerospace and Safety, Barcelona.
+Rapita's core product is **RVS** (requirements/coverage tool) and **MACH178**
+(multicore timing analysis — WCET evidence for DO-178C Level A/B avionics).
+
+### What you already know (from building this VM)
+
+| Topic | Detail |
+|-------|--------|
+| Instruction encoding | All six formats (R/I/S/B/U/J), field positions, immediate reconstruction |
+| CSR mechanism | `csrr/csrw/csrs/csrc`, privilege-gated access, CSR address map |
+| M-mode boot sequence | mtvec, mie, mstatus.MIE, mret |
+| CLINT | mtime at 0x200_BFF8, mtimecmp at 0x200_4000, timer-fire → MIP.MTIP |
+| PLIC | claim/complete cycle, priority, enable bits per hart |
+| Trap lifecycle | mcause (interrupt bit 63), mepc, mstatus.MPIE/MPP, mret restores |
+| ELF64 loading | e_entry, phoff, PT_LOAD segments, paddr→flat DRAM buffer |
+| C extension | riscv64gc emits 16-bit insns; `.option norvc` disables in asm |
+
+---
+
+## 18. Must-know for the interview
+
+### 18.1 RVWMO — RISC-V Weak Memory Ordering
+
+RISC-V does **not** guarantee total store order (unlike x86 TSO).
+
+Key rules:
+- A hart's own loads/stores appear in program order *to itself*.
+- Stores become visible to *other harts* in an unspecified order unless fenced.
+- `FENCE` operands: `r`=read, `w`=write, `i`=instruction, `o`=output (device).
+
+Common FENCE patterns:
+```asm
+FENCE rw, rw    # full barrier (C11 seq_cst)
+FENCE w, w      # store-store (release)
+FENCE r, rw     # acquire
+FENCE.I         # instruction-fetch barrier (flush I-cache after code patch)
+```
+
+LR/SC atomics:
+- `LR.D rd, (rs1)` — load-reserved 64-bit; sets a reservation on the address.
+- `SC.D rd, rs2, (rs1)` — store-conditional; writes only if reservation still valid.
+  `rd=0` on success, `rd≠0` on failure (reservation lost due to interrupt or
+  another hart writing the same cache line).
+- AMOs (`AMOADD.D`, `AMOSWAP.D`, `AMOOR.D`, …) are single-instruction atomic
+  read-modify-write; they carry `.aq` (acquire) and `.rl` (release) suffixes.
+
+Why it matters for Rapita/WCET:
+- Spinlock acquisition time is bounded by LR/SC retry count.
+- MACH178 must account for interference on the memory bus between harts.
+
+### 18.2 Multiple harts
+
+`mhartid` CSR (read-only) — unique ID for the executing hart (0, 1, 2, …).
+
+Per-hart CLINT mtimecmp:
+```
+mtimecmp for hart N  =  CLINT_BASE + 0x4000 + 8 * N
+```
+So hart 0 → 0x0200_4000, hart 1 → 0x0200_4008, etc.
+`mtime` at 0x0200_BFF8 is shared across all harts (single counter).
+
+Per-hart PLIC claim/complete:
+```
+claim   for hart N (M-mode)  =  PLIC_BASE + 0x20_0004 + 0x1000 * (2*N)
+complete for hart N (M-mode) =  same address (write = complete)
+```
+
+Booting multiple harts (typical SMP pattern):
+```asm
+csrr  t0, mhartid
+bnez  t0, .Lspin      # all non-zero harts park here
+# hart 0 initialises memory, then writes a release word
+.Lspin:
+    lw t1, 0(t2)      # poll release word (with LR.W or AMO for ordering)
+    beqz t1, .Lspin
+    # jump to per-hart stack and main loop
+```
+
+### 18.3 Physical Memory Protection (PMP)
+
+PMP partitions physical address space — critical for mixed-criticality systems
+(partition A cannot corrupt partition B's memory).
+
+Registers:
+- `pmpcfg0`–`pmpcfg3` — 8-byte CSRs, each holds 8 × 1-byte config entries.
+- `pmpaddr0`–`pmpaddr15` — 64-bit address registers (bits [55:2] of physical addr).
+
+Config byte layout (per entry):
+```
+bit 7   : L  (locked — cannot be changed until reset)
+bit 4-3 : A  (00=off, 01=TOR top-of-range, 10=NA4, 11=NAPOT)
+bit 2   : X  (execute)
+bit 1   : W  (write)
+bit 0   : R  (read)
+```
+
+NAPOT example — 4 KB region at 0x8000_0000:
+```
+pmpaddr = (0x8000_0000 >> 2) | (0x1000/8 - 1)  =  0x2000_01FF
+pmpcfg  = 0x9F  (L=1, NAPOT, RWX)
+```
+
+Safety use: partition A gets RWX on its own region; all other regions are
+read-only or no-access → spatial isolation certified under DO-178C / AMC 20-193.
+
+### 18.4 Performance monitoring counters
+
+Base counters (always present in RV64I):
+| CSR name | CSR addr | Read from U-mode via |
+|----------|----------|----------------------|
+| `mcycle` | 0xB00 | `cycle` (0xC00) |
+| `minstret` | 0xB02 | `instret` (0xC02) |
+| `mtime` | — | CLINT MMIO 0x200_BFF8 |
+
+High-performance counters:
+- `mhpmcounter3`–`mhpmcounter31` (0xB03–0xB1F): general purpose.
+- `mhpmevent3`–`mhpmevent31` (0x323–0x33F): select which microarch event
+  each counter tracks (cache miss, branch mispredict, bus stall, …).
+  Event encodings are platform-defined (not in the ISA spec).
+
+Access control:
+- `mcounteren` (M-mode) — bits enable delegation of `cycle/instret/hpmcounterN`
+  to S-mode.
+- `scounteren` (S-mode) — further delegates to U-mode.
+
+WCET use: read `minstret` in the trap handler around each task quantum to get
+exact retired-instruction count — Rapita's MACH178 uses hardware counters this
+way to bound execution time statistically.
+
+### 18.5 S-mode privilege delegation
+
+`medeleg` (Machine Exception Delegation):
+- 64-bit CSR; bit `N` set → exception cause N is taken in S-mode, not M-mode.
+- Bit 8 = Environment call from U-mode (so Linux syscalls stay in S-mode).
+- Bit 12 = Instruction page fault; bit 13 = load page fault; bit 15 = store PF.
+
+`mideleg` (Machine Interrupt Delegation):
+- Bit 1 = Software interrupt (SSIP), bit 5 = Timer (STIP), bit 9 = External (SEIP).
+
+`sret` instruction:
+- PC ← `sepc`
+- Privilege ← `sstatus.SPP` (0=U, 1=S), then SPP ← 0
+- `sstatus.SIE` ← `sstatus.SPIE`
+
+`satp` CSR (0x180) — controls virtual memory:
+```
+bit 63-60 : MODE  (0=bare, 8=Sv39, 9=Sv48)
+bit 59-44 : ASID  (address space ID for TLB tagging)
+bit 43-0  : PPN   (physical page number of root page table)
+```
+Sv39: 3-level, 39-bit VA → 56-bit PA. Each PTE is 8 bytes; page size 4 KB.
+
+---
+
+## 19. RISC-V vs ARM vs PowerPC — comparison table
+
+Relevant because Rapita also supports ARMv8 and PowerPC (QorIQ) in avionics.
+
+| Feature | RISC-V (RV64) | ARMv8-A (AArch64) | PowerPC (e200/QorIQ) |
+|---------|--------------|-------------------|----------------------|
+| Memory model | RVWMO (weak) | VMSA (weak, TSO optional) | Book E (weak) |
+| Interrupt controller | PLIC (SW-configurable) | GIC (v2/v3/v4) | MPIC / INTC |
+| Timer | CLINT mtime/mtimecmp | Generic Timer (CNTPCT_EL0) | Decrementer (SPR 22) |
+| Atomics | LR/SC + AMO | LDXR/STXR + CAS | lwarx/stwcx. |
+| Cache coherency | Not in ISA spec (platform) | MOESI/MESI in spec | MESI, book E defined |
+| Debug interface | RISC-V Debug Spec (DM) | ARM CoreSight / JTAG | Nexus 5001 / JTAG |
+| Hypervisor | H extension (optional) | EL2 (mandatory in v8) | BookE HV mode |
+| Safety cert. history | Emerging (SiFive, Andes) | Mature (Cortex-R, -A) | Mature (MPC5xxx, QorIQ) |
+| Open ISA | Yes (royalty-free) | No (ARM licence) | No (NXP licence) |
+
+For DO-178C tool qualification: Rapita RVS works across all three because it
+instruments at source/object level, not ISA-specific. MACH178 requires a
+hardware performance counter (or trace port) — available on all three.
+
+---
+
+## 20. AMC 20-193 — multicore interference channels
+
+AMC 20-193 (FAA advisory circular, mirrors CAST-32A) defines three classes of
+interference that must be addressed for airborne multicore certification:
+
+1. **Spatial interference** — one partition writes to another's memory or MMIO.
+   Mitigation: PMP / MPU, hypervisor stage-2 page tables, memory firewall IP.
+
+2. **Temporal interference** — one partition's memory bus activity delays another
+   (cache eviction, DRAM row-activation latency, shared TLB thrashing).
+   Mitigation: cache colouring, DRAM scrubbing budget, time-triggered schedule.
+   MACH178 quantifies this: "maximum observed interference margin."
+
+3. **Logical interference** — shared data structures corrupted by concurrent
+   access (race conditions, lock-free queue corruption).
+   Mitigation: formal analysis, WCET-safe spinlocks with bounded retry,
+   message-passing instead of shared memory.
+
+RISC-V handles (1) with PMP, (3) with LR/SC + FENCE, but (2) is microarch-
+specific and is exactly what Rapita's MACH178 tooling measures on real hardware.
+
+---
+
+## 21. Interview answer template
+
+**Q: "Have you worked with RISC-V?"**
+
+> "Yes — I built a RISC-V64 virtual machine in Rust from scratch: pipeline
+> decode/execute, M-mode CSRs, CLINT timer with interrupt delivery, PLIC for
+> external interrupts, ELF64 loader, and a bare-metal Rust kernel that boots
+> and handles timer interrupts in a trap handler. I ran it against a
+> hand-written fib(10) program and a multi-tick timer test.
+>
+> On the architecture side I've studied the RVWMO memory model and how LR/SC
+> atomics interact with the reservation mechanism, PMP for physical memory
+> partitioning (relevant to spatial isolation in DO-178C), per-hart CLINT
+> addressing, and the privilege delegation model (medeleg/mideleg → S-mode).
+>
+> I'm particularly interested in how Rapita's MACH178 uses hardware performance
+> counters to measure temporal interference on multicore, since my VM already
+> exposes cycle/instret counters — bridging the gap between bare-metal and
+> measurement-based WCET evidence is the natural next step for the project."
+
+**Q: "What is WCET and why is it hard on multicore?"**
+
+> "WCET is the upper bound on execution time for a given task on given hardware.
+> On a single core it is dominated by cache misses and pipeline stalls — bounded
+> by static analysis or measurement. On multicore, temporal interference
+> (cache eviction, memory bus contention, shared DRAM latency) adds unbounded
+> delay from co-running tasks. AMC 20-193 requires you to either prevent
+> interference (time-partitioning, cache colouring) or measure and bound it
+> empirically. MACH178 does the latter using hardware counters and stress tests."
+
+**Q: "What is RVWMO?"**
+
+> "RISC-V Weak Memory Ordering — the ISA's formal memory consistency model.
+> Unlike x86 TSO, RISC-V allows stores from one hart to become visible to other
+> harts out of program order. FENCE instructions impose ordering constraints.
+> For safety-critical multicore code this means every shared-data access must
+> be paired with the right FENCE or AMO acquire/release annotation, otherwise
+> the hardware is free to reorder. The spec chapter on RVWMO also defines the
+> Preserved Program Order rules and the global memory order axioms."
