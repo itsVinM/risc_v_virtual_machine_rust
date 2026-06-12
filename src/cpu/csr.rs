@@ -3,7 +3,7 @@ pub const CSR_MSTATUS:  usize = 0x300; // global interrupt enable + privilege st
 pub const CSR_MISA:     usize = 0x301; // which ISA extensions are active (RV64IMAC)
 pub const CSR_MIE:      usize = 0x304; // interrupt enable mask — which interrupts to listen to
 pub const CSR_MTVEC:    usize = 0x305; // trap vector — address to jump to when interrupt/exception fires
-pub const CSR_MSCRATCH: usize = 0x340; // scratch register — free for OS use (e.g. save sp on trap entry)
+pub const CSR_MSCRATCH: usize = 0x340; // scratch register — free for OS use 
 pub const CSR_MEPC:     usize = 0x341; // exception PC — address saved when trap fires, restored by mret
 pub const CSR_MCAUSE:   usize = 0x342; // trap cause — what triggered the trap (timer=0x8000...7, illegal=2)
 pub const CSR_MTVAL:    usize = 0x343; // trap value — extra info (e.g. faulting address or bad instruction)

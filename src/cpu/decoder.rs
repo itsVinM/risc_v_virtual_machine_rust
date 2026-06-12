@@ -83,10 +83,7 @@ pub enum Inst {
     Illegal(u32),
 }
 
-// ── Bit field helpers ─────────────────────────────────────────────────────────
-// Every RISC-V instruction is 32 bits. These extract named slices of those bits.
-// Instruction layout: [31..25 funct7][24..20 rs2][19..15 rs1][14..12 funct3][11..7 rd][6..0 opcode]
-
+// BIT FIELD HELPERS: extract bits from a raw instruction word (u32).
 #[inline(always)] fn bits(x: u32, lo: u32, hi: u32) -> u32 { (x >> lo) & ((1 << (hi - lo + 1)) - 1) }
 #[inline(always)] fn bit(x: u32, n: u32) -> u32 { (x >> n) & 1 }
 
@@ -96,9 +93,7 @@ pub enum Inst {
     ((x as i64) << shift) >> shift
 }
 
-// ── Immediate decoders ────────────────────────────────────────────────────────
-// RISC-V scrambles immediate bits differently per format to keep rs1/rs2 in fixed positions.
-// Each function reassembles the bits into a sign-extended i64.
+// IMMEDIATE DECODERS
 
 fn imm_i(raw: u32) -> i64 { sign_ext(bits(raw, 20, 31), 11) }
 fn imm_s(raw: u32) -> i64 { sign_ext((bits(raw, 25, 31) << 5) | bits(raw, 7, 11), 11) }
@@ -116,11 +111,7 @@ fn imm_j(raw: u32) -> i64 {
     sign_ext(imm, 20)
 }
 
-// ── Decoder ───────────────────────────────────────────────────────────────────
-// Opcode (bits 6:0) selects the instruction group.
-// funct3 (bits 14:12) and funct7 (bits 31:25) disambiguate within a group.
-// All opcodes and encoding values come from RISC-V Vol I, Chapter 24.
-
+// DECODER: takes a raw 32-bit instruction word and returns a decoded Inst enum variant.
 pub fn decode(raw: u32) -> Inst {
     let opcode = raw & 0x7F;
     let rd     = bits(raw,  7, 11) as u8;

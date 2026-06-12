@@ -1,6 +1,6 @@
 use crate::traps::TrapCause;
 
-// ── Memory map ────────────────────────────────────────────────────────────────
+// Memory map 
 pub const DRAM_BASE:  u64 = 0x8000_0000;
 pub const DRAM_END:   u64 = 0x8800_0000;
 pub const CLINT_BASE: u64 = 0x0200_0000;
@@ -10,7 +10,7 @@ pub const PLIC_END:   u64 = 0x0FFF_FFFF;
 
 const DRAM_SIZE: u64 = 128 * 1024 * 1024;
 
-// ── DRAM ──────────────────────────────────────────────────────────────────────
+// DRAM 
 struct Memory {
     data: Vec<u8>,
 }
@@ -50,7 +50,7 @@ impl Memory {
     fn write64(&mut self, addr: u64, v: u64) { if let Some(i) = self.off(addr) { self.data[i..i+8].copy_from_slice(&v.to_le_bytes()); } }
 }
 
-// ── CLINT — timer ─────────────────────────────────────────────────────────────
+// CLINT — timer
 // mtime increments every tick; fires when mtime >= mtimecmp.
 const MTIMECMP_LO: u64 = 0x4000;
 const MTIMECMP_HI: u64 = 0x4004;
@@ -103,7 +103,7 @@ impl Clint {
     }
 }
 
-// ── PLIC — external interrupt controller (stub) ───────────────────────────────
+// PLIC — external interrupt controller (stub) 
 struct Plic {
     priority:  [u32; 53],
     pending:   u64,
@@ -144,7 +144,7 @@ impl Plic {
     }
 }
 
-// ── MMU / Bus ─────────────────────────────────────────────────────────────────
+// MMU / Bus 
 pub struct Mmu {
     dram:      Memory,
     pub clint: Clint,

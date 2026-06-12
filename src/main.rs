@@ -12,8 +12,7 @@ use cpu::csr::{CSR_CYCLE, CSR_INSTRET};
 use debug::disasm::disassemble;
 use traps::TrapCause;
 
-// ── ELF64 loader ──────────────────────────────────────────────────────────────
-
+//  ELF64 loader — supports only the simplest executables (no dynamic linking, no TLS, no weird sections).
 fn load_file(bytes: &[u8]) -> (Bus, u64) {
     let is_elf = bytes.len() >= 4 && bytes[0..4] == [0x7f, b'E', b'L', b'F'];
     if is_elf {
@@ -50,7 +49,7 @@ fn load_elf(b: &[u8]) -> Option<(Vec<u8>, u64)> {
     Some((flat, entry))
 }
 
-// ── ANSI helpers ──────────────────────────────────────────────────────────────
+// ANSI HELPERS: control codes for clearing the screen and coloring text. --- IGNORE ---
 const CLR: &str = "\x1b[2J\x1b[H";
 const DIM: &str = "\x1b[2m";
 const RST: &str = "\x1b[0m";
@@ -103,7 +102,7 @@ fn prompt(bps: &[u64]) -> String {
     line.trim().to_string()
 }
 
-// ── VM helpers ────────────────────────────────────────────────────────────────
+//  VM helpers 
 
 fn vm_tick(cpu: &mut Cpu, bus: &mut Bus) -> StepResult {
     if bus.clint.timer_pending() { cpu.csr.set_mip_timer(); }
@@ -128,8 +127,7 @@ fn run_until(cpu: &mut Cpu, bus: &mut Bus, bps: &[u64], n: Option<u64>) -> StepR
     StepResult::Ok
 }
 
-// ── Debugger ──────────────────────────────────────────────────────────────────
-
+//Debugger: a simple command-line interface for stepping through instructions, inspecting state, and setting breakpoints.
 fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
     let mut bps: Vec<u64> = Vec::new();
     println!("{CYN}RISC-V64 live debugger{RST}");
@@ -178,7 +176,7 @@ fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
     }
 }
 
-// ── Headless run ──────────────────────────────────────────────────────────────
+//  Headless run 
 
 fn run_headless(cpu: &mut Cpu, bus: &mut Bus) {
     loop {
@@ -197,7 +195,7 @@ fn run_headless(cpu: &mut Cpu, bus: &mut Bus) {
     }
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// Entry point 
 
 fn main() {
     let args: Vec<String> = env::args().collect();

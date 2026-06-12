@@ -50,7 +50,7 @@ impl TrapCause {
     }
 }
 
-// ── mstatus / mie / mip bit masks ─────────────────────────────────────────────
+// mstatus / mie / mip bit masks 
 pub const MSTATUS_MIE:  u64 = 1 << 3;   // global interrupt enable
 pub const MSTATUS_MPIE: u64 = 1 << 7;   // previous interrupt enable (saved on trap)
 pub const MSTATUS_MPP:  u64 = 0b11 << 11; // previous privilege mode
@@ -59,7 +59,7 @@ pub const MIE_MSIE: u64 = 1 << 3;  // machine software interrupt enable
 pub const MIE_MTIE: u64 = 1 << 7;  // machine timer interrupt enable
 pub const MIE_MEIE: u64 = 1 << 11; // machine external interrupt enable
 
-// ── Interrupt check ───────────────────────────────────────────────────────────
+// Interrupt check 
 // Called every step: returns the highest-priority pending+enabled interrupt,
 // or None if interrupts are globally disabled or nothing is pending.
 pub fn pending_interrupt(mstatus: u64, mie: u64, mip: u64) -> Option<TrapCause> {
