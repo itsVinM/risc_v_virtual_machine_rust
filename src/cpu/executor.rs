@@ -1,16 +1,94 @@
 use crate::cpu::decoder::Inst;
-use crate::cpu::csr::{CsrFile, CsrOp};
+use crate::cpu::csr::{
+    CsrFile, CsrOp, Privilege, csr_access_ok,
+    CSR_MEPC, CSR_MSTATUS, CSR_SATP, CSR_SEPC,
+    MSTATUS_MIE, MSTATUS_MPP, MSTATUS_MPIE,
+    MSTATUS_SIE, MSTATUS_SPP, MSTATUS_SPIE,
+    SATP_PPN, SATP_MODE_BARE, SATP_MODE_SV39,
+};
 use crate::mmu::Mmu as Bus;
 use crate::traps::TrapCause;
 
-// Sign-extend a 32-bit value to 64 bits
-#[inline(always)] fn sext32(x: u32) -> u64 { (x as i32) as i64 as u64 }
+fn sext32(x: u32) -> u64 { (x as i32) as i64 as u64 }
 
 pub struct ExecResult {
     pub next_pc: u64,
     pub trap: Option<TrapCause>,
     pub halt: bool,
+    pub new_priv: Option<Privilege>,
 }
+
+fn satp_ppn(satp: u64) -> u64 { satp & SATP_PPN }
+fn satp_mode(satp: u64) -> u64 { (satp >> 60) & 0xF }
+fn pte_ppn(pte: u64) -> u64 { (pte >> 10) & 0x00FF_FFFF_FFFF }
+
+const PTE_R: u64 = 1 << 1;
+const PTE_W: u64 = 1 << 2;
+const PTE_X: u64 = 1 << 3;
+const PTE_U: u64 = 1 << 4;
+
+fn translate(va: u64, priv_level: Privilege, bus: &Bus, satp: u64, access_type: AccessType) -> Result<u64, TrapCause> {
+    if priv_level == Privilege::M {
+        return Ok(va);
+    }
+    if satp_mode(satp) == SATP_MODE_BARE {
+        return Ok(va);
+    }
+    if satp_mode(satp) != SATP_MODE_SV39 {
+        return Err(TrapCause::IllegalInstruction(0));
+    }
+
+    let vpn = |level: u64| -> u64 { (va >> (12 + level * 9)) & 0x1FF };
+    let root_ppn = satp_ppn(satp);
+
+    let mut pte_addr = (root_ppn << 12) + (vpn(2) << 3);
+    let mut pte = bus.read_phys64(pte_addr).map_err(|_| TrapCause::LoadPageFault)?;
+
+    if pte & 1 == 0 {
+        return Err(TrapCause::LoadPageFault);
+    }
+
+    for level in (0..=1).rev() {
+        if pte & (PTE_R | PTE_W | PTE_X) != 0 {
+            break;
+        }
+        let ppn = pte_ppn(pte);
+        pte_addr = (ppn << 12) + (vpn(level) << 3);
+        pte = bus.read_phys64(pte_addr).map_err(|_| TrapCause::LoadPageFault)?;
+        if pte & 1 == 0 {
+            return Err(TrapCause::LoadPageFault);
+        }
+    }
+
+    if pte & (PTE_R | PTE_W | PTE_X) == 0 {
+        return Err(TrapCause::LoadPageFault);
+    }
+
+    let ppn = pte_ppn(pte);
+    let offset = va & 0xFFF;
+    let pa = (ppn << 12) | offset;
+
+    let perm_ok = match access_type {
+        AccessType::Read => pte & (PTE_R | PTE_X) != 0,
+        AccessType::Write => pte & (PTE_R | PTE_W) == (PTE_R | PTE_W),
+    };
+
+    if !perm_ok {
+        return Err(match access_type {
+            AccessType::Read => TrapCause::LoadPageFault,
+            AccessType::Write => TrapCause::StorePageFault,
+        });
+    }
+
+    if priv_level == Privilege::U && pte & PTE_U == 0 {
+        return Err(TrapCause::LoadPageFault);
+    }
+
+    Ok(pa)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccessType { Read, Write }
 
 pub fn execute(
     inst: Inst,
@@ -18,10 +96,12 @@ pub fn execute(
     regs: &mut [u64; 32],
     csr: &mut CsrFile,
     bus: &mut Bus,
+    priv_level: Privilege,
 ) -> ExecResult {
     let mut next_pc = pc.wrapping_add(4);
     let mut trap: Option<TrapCause> = None;
     let mut halt = false;
+    let mut new_priv: Option<Privilege> = None;
 
     macro_rules! reg { ($r:expr) => { regs[$r as usize] }; }
     macro_rules! set { ($r:expr, $v:expr) => { if $r != 0 { regs[$r as usize] = $v; } }; }
@@ -49,60 +129,71 @@ pub fn execute(
 
         Inst::Lb  { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            match bus.read8(addr) {
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            match bus.read8(pa) {
                 Ok(v) => set!(rd, v as i8 as i64 as u64),
                 Err(e) => trap = Some(e),
             }
         }
         Inst::Lh  { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            match bus.read16(addr) {
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            match bus.read16(pa) {
                 Ok(v) => set!(rd, v as i16 as i64 as u64),
                 Err(e) => trap = Some(e),
             }
         }
         Inst::Lw  { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            match bus.read32(addr) {
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            match bus.read32(pa) {
                 Ok(v) => set!(rd, sext32(v)),
                 Err(e) => trap = Some(e),
             }
         }
         Inst::Ld  { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            match bus.read64(addr) {
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            match bus.read64(pa) {
                 Ok(v) => set!(rd, v),
                 Err(e) => trap = Some(e),
             }
         }
         Inst::Lbu { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            match bus.read8(addr) { Ok(v) => set!(rd, v as u64), Err(e) => trap = Some(e) }
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            match bus.read8(pa) { Ok(v) => set!(rd, v as u64), Err(e) => trap = Some(e) }
         }
         Inst::Lhu { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            match bus.read16(addr) { Ok(v) => set!(rd, v as u64), Err(e) => trap = Some(e) }
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            match bus.read16(pa) { Ok(v) => set!(rd, v as u64), Err(e) => trap = Some(e) }
         }
         Inst::Lwu { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            match bus.read32(addr) { Ok(v) => set!(rd, v as u64), Err(e) => trap = Some(e) }
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            match bus.read32(pa) { Ok(v) => set!(rd, v as u64), Err(e) => trap = Some(e) }
         }
 
         Inst::Sb { rs1, rs2, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            if let Err(e) = bus.write8(addr, reg!(rs2) as u8) { trap = Some(e); }
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            if let Err(e) = bus.write8(pa, reg!(rs2) as u8) { trap = Some(e); }
         }
         Inst::Sh { rs1, rs2, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            if let Err(e) = bus.write16(addr, reg!(rs2) as u16) { trap = Some(e); }
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            if let Err(e) = bus.write16(pa, reg!(rs2) as u16) { trap = Some(e); }
         }
         Inst::Sw { rs1, rs2, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            if let Err(e) = bus.write32(addr, reg!(rs2) as u32) { trap = Some(e); }
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            if let Err(e) = bus.write32(pa, reg!(rs2) as u32) { trap = Some(e); }
         }
         Inst::Sd { rs1, rs2, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            if let Err(e) = bus.write64(addr, reg!(rs2)) { trap = Some(e); }
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            if let Err(e) = bus.write64(pa, reg!(rs2)) { trap = Some(e); }
         }
 
         Inst::Addi  { rd, rs1, imm } => set!(rd, reg!(rs1).wrapping_add(imm as u64)),
@@ -126,7 +217,6 @@ pub fn execute(
         Inst::Or   { rd, rs1, rs2 } => set!(rd, reg!(rs1) | reg!(rs2)),
         Inst::And  { rd, rs1, rs2 } => set!(rd, reg!(rs1) & reg!(rs2)),
 
-        // W-suffix: operate on low 32 bits, sign-extend result to 64
         Inst::Addiw { rd, rs1, imm } => set!(rd, sext32(reg!(rs1).wrapping_add(imm as u64) as u32)),
         Inst::Slliw { rd, rs1, shamt } => set!(rd, sext32((reg!(rs1) as u32) << shamt)),
         Inst::Srliw { rd, rs1, shamt } => set!(rd, sext32((reg!(rs1) as u32) >> shamt)),
@@ -137,7 +227,6 @@ pub fn execute(
         Inst::Srlw  { rd, rs1, rs2 } => set!(rd, sext32((reg!(rs1) as u32) >> (reg!(rs2) & 31))),
         Inst::Sraw  { rd, rs1, rs2 } => set!(rd, ((reg!(rs1) as i32) >> (reg!(rs2) & 31)) as i64 as u64),
 
-        // M extension
         Inst::Mul    { rd, rs1, rs2 } => set!(rd, reg!(rs1).wrapping_mul(reg!(rs2))),
         Inst::Mulh   { rd, rs1, rs2 } => {
             let a = reg!(rs1) as i64 as i128;
@@ -188,47 +277,116 @@ pub fn execute(
             set!(rd, if b == 0 { sext32(reg!(rs1) as u32) } else { sext32(reg!(rs1) as u32 % b) });
         }
 
-        Inst::Ecall  => trap = Some(TrapCause::EcallFromM),
+        Inst::AmoswapW { rd, rs1, rs2, aq: _, rl: _ } => {
+            let addr = reg!(rs1);
+            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            if let Ok(old) = bus.read32(pa) {
+                if bus.write32(pa, reg!(rs2) as u32).is_ok() {
+                    set!(rd, old as i32 as i64 as u64);
+                } else {
+                    trap = Some(TrapCause::StoreAccessFault);
+                }
+            } else {
+                trap = Some(TrapCause::LoadAccessFault);
+            }
+        }
+
+        Inst::Ecall  => {
+            let cause = match priv_level {
+                Privilege::U => TrapCause::EcallFromU,
+                Privilege::S => TrapCause::EcallFromS,
+                Privilege::M => TrapCause::EcallFromM,
+            };
+            trap = Some(cause);
+        }
         Inst::Ebreak => { halt = true; }
-        Inst::Fence  => { /* no-op for single-core */ }
-        Inst::Mret   => {
-            // Restore PC from mepc, restore MIE from MPIE
-            next_pc = csr.read(crate::cpu::csr::CSR_MEPC);
-            let mut ms = csr.mstatus();
-            let mpie = (ms >> 7) & 1;
-            ms = (ms & !(1 << 3)) | (mpie << 3); // MIE = MPIE
-            ms |= 1 << 7;                          // MPIE = 1
-            ms = (ms & !0x1800) | 0x0000;          // MPP = U (0)
-            csr.write(crate::cpu::csr::CSR_MSTATUS, ms);
+        Inst::Fence  => {}
+
+        Inst::Mret => {
+            if priv_level != Privilege::M {
+                trap = Some(TrapCause::IllegalInstruction(0x30200073));
+            } else {
+                next_pc = csr.read(CSR_MEPC, Privilege::M);
+                let ms = csr.mstatus();
+                let mpp = (ms >> 11) & 0b11;
+                let mpie = (ms >> 7) & 1;
+                let mut new_ms = ms & !(MSTATUS_MIE | MSTATUS_MPP | MSTATUS_MPIE);
+                new_ms |= mpie << 3;      // MIE = MPIE
+                new_ms |= 1 << 7;          // MPIE = 1
+                new_ms |= mpp << 11;       // preserve MPP for priv update in step()
+                csr.write(CSR_MSTATUS, new_ms, Privilege::M);
+                new_priv = Some(match mpp { 1 => Privilege::S, 0 => Privilege::U, _ => Privilege::M });
+            }
+        }
+
+        Inst::Sret => {
+            let spp = (csr.mstatus() >> 8) & 1;
+            let spie = (csr.mstatus() >> 5) & 1;
+            let mut new_ms = csr.mstatus();
+            new_ms &= !(MSTATUS_SIE | MSTATUS_SPP | MSTATUS_SPIE);
+            new_ms |= spie << 1;       // SIE = SPIE
+            new_ms |= 1 << 5;          // SPIE = 1
+            new_ms |= spp << 8;        // preserve SPP for priv update
+            if priv_level < Privilege::S {
+                trap = Some(TrapCause::IllegalInstruction(0x10200073));
+            } else {
+                next_pc = csr.read(CSR_SEPC, priv_level);
+                csr.write(CSR_MSTATUS, new_ms, Privilege::M);
+                new_priv = Some(if spp == 1 { Privilege::S } else { Privilege::U });
+            }
         }
 
         Inst::Csrrw  { rd, rs1, csr: addr } => {
-            let v = csr.read_write(addr as usize, reg!(rs1), CsrOp::Write);
-            set!(rd, v);
+            if !csr_access_ok(addr as usize, priv_level) {
+                trap = Some(TrapCause::IllegalInstruction(addr as u32));
+            } else {
+                let v = csr.read_write(addr as usize, reg!(rs1), CsrOp::Write, priv_level);
+                set!(rd, v);
+            }
         }
         Inst::Csrrs  { rd, rs1, csr: addr } => {
-            let v = csr.read_write(addr as usize, reg!(rs1), CsrOp::Set);
-            set!(rd, v);
+            if !csr_access_ok(addr as usize, priv_level) {
+                trap = Some(TrapCause::IllegalInstruction(addr as u32));
+            } else {
+                let v = csr.read_write(addr as usize, reg!(rs1), CsrOp::Set, priv_level);
+                set!(rd, v);
+            }
         }
         Inst::Csrrc  { rd, rs1, csr: addr } => {
-            let v = csr.read_write(addr as usize, reg!(rs1), CsrOp::Clear);
-            set!(rd, v);
+            if !csr_access_ok(addr as usize, priv_level) {
+                trap = Some(TrapCause::IllegalInstruction(addr as u32));
+            } else {
+                let v = csr.read_write(addr as usize, reg!(rs1), CsrOp::Clear, priv_level);
+                set!(rd, v);
+            }
         }
         Inst::Csrrwi { rd, uimm, csr: addr } => {
-            let v = csr.read_write(addr as usize, uimm as u64, CsrOp::Write);
-            set!(rd, v);
+            if !csr_access_ok(addr as usize, priv_level) {
+                trap = Some(TrapCause::IllegalInstruction(addr as u32));
+            } else {
+                let v = csr.read_write(addr as usize, uimm as u64, CsrOp::Write, priv_level);
+                set!(rd, v);
+            }
         }
         Inst::Csrrsi { rd, uimm, csr: addr } => {
-            let v = csr.read_write(addr as usize, uimm as u64, CsrOp::Set);
-            set!(rd, v);
+            if !csr_access_ok(addr as usize, priv_level) {
+                trap = Some(TrapCause::IllegalInstruction(addr as u32));
+            } else {
+                let v = csr.read_write(addr as usize, uimm as u64, CsrOp::Set, priv_level);
+                set!(rd, v);
+            }
         }
         Inst::Csrrci { rd, uimm, csr: addr } => {
-            let v = csr.read_write(addr as usize, uimm as u64, CsrOp::Clear);
-            set!(rd, v);
+            if !csr_access_ok(addr as usize, priv_level) {
+                trap = Some(TrapCause::IllegalInstruction(addr as u32));
+            } else {
+                let v = csr.read_write(addr as usize, uimm as u64, CsrOp::Clear, priv_level);
+                set!(rd, v);
+            }
         }
 
         Inst::Illegal(raw) => trap = Some(TrapCause::IllegalInstruction(raw)),
     }
 
-    ExecResult { next_pc, trap, halt }
+    ExecResult { next_pc, trap, halt, new_priv }
 }

@@ -4,6 +4,8 @@
 pub enum Inst {
     // RV64I
     Lui   { rd: u8, imm: i64 },
+    // A extension (atomics)
+    AmoswapW { rd: u8, rs1: u8, rs2: u8, aq: bool, rl: bool },
     Auipc { rd: u8, imm: i64 },
     Jal   { rd: u8, imm: i64 },
     Jalr  { rd: u8, rs1: u8, imm: i64 },
@@ -77,9 +79,9 @@ pub enum Inst {
     Csrrwi { rd: u8, uimm: u8, csr: u16 },
     Csrrsi { rd: u8, uimm: u8, csr: u16 },
     Csrrci { rd: u8, uimm: u8, csr: u16 },
-    // Mret
+    // Mret / Sret
     Mret,
-    // Compressed (C extension) - placeholder, returns Illegal if not handled
+    Sret,
     Illegal(u32),
 }
 
@@ -220,14 +222,26 @@ pub fn decode(raw: u32) -> Inst {
             _           => Inst::Illegal(raw),
         },
 
-        0x73 => match funct3 { // system instructions
+         0x2F => {
+            let funct5 = bits(raw, 27, 31);
+            let aq = bit(raw, 26) != 0;
+            let rl = bit(raw, 25) != 0;
+            match (funct5, funct3) {
+                (0x01, 0x2) => Inst::AmoswapW { rd, rs1, rs2, aq, rl },
+                _ => Inst::Illegal(raw),
+            }
+        }
+
+         0x73 => match funct3 { // system instructions
             // funct3=0: match full word because ecall/ebreak/mret share opcode+funct3
-            0x0 => match raw {
-                0x0000_0073 => Inst::Ecall,
-                0x0010_0073 => Inst::Ebreak,
-                0x1050_0073 => Inst::Fence,  // WFI — wait for interrupt, no-op on single core
-                0x3020_0073 => Inst::Mret,   // return from machine-mode trap
-                _           => Inst::Illegal(raw),
+             0x0 => match raw {
+                 0x0000_0073 => Inst::Ecall,
+                 0x0010_0073 => Inst::Ebreak,
+                 0x1020_0073 => Inst::Sret,   // return from supervisor trap
+                 0x1050_0073 => Inst::Fence,  // WFI — wait for interrupt, no-op on single core
+                 0x3020_0073 => Inst::Mret,   // return from machine-mode trap
+                 _ if raw & 0xFE007FFF == 0x12000073 => Inst::Fence, // sfence.vma
+                 _           => Inst::Illegal(raw),
             },
             // CSR instructions: read old value into rd, then write/set/clear with rs1
             0x1 => Inst::Csrrw  { rd, rs1,       csr }, // atomic read+write

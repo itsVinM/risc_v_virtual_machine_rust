@@ -1,7 +1,15 @@
-// ── Trap causes ───────────────────────────────────────────────────────────────
+use crate::cpu::csr::{
+    MIP_MEIP, MIP_MSIP, MIP_MTIP,
+    MIP_SEIP, MIP_SSIP, MIP_STIP,
+    MSTATUS_MIE, MSTATUS_SIE,
+    Privilege,
+};
+
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum TrapCause {
-    // Exceptions
     InstructionAddressMisaligned,
     InstructionAccessFault,
     IllegalInstruction(u32),
@@ -16,7 +24,6 @@ pub enum TrapCause {
     InstructionPageFault,
     LoadPageFault,
     StorePageFault,
-    // Interrupts (bit 63 set in mcause)
     SoftwareInterrupt,
     TimerInterrupt,
     ExternalInterrupt,
@@ -48,25 +55,61 @@ impl TrapCause {
     pub fn is_interrupt(self) -> bool {
         matches!(self, Self::SoftwareInterrupt | Self::TimerInterrupt | Self::ExternalInterrupt)
     }
+
+    pub fn exception_code(self) -> u64 {
+        self.code() & !(1 << 63)
+    }
 }
 
-// mstatus / mie / mip bit masks 
-pub const MSTATUS_MIE:  u64 = 1 << 3;   // global interrupt enable
-pub const MSTATUS_MPIE: u64 = 1 << 7;   // previous interrupt enable (saved on trap)
-pub const MSTATUS_MPP:  u64 = 0b11 << 11; // previous privilege mode
-
-pub const MIE_MSIE: u64 = 1 << 3;  // machine software interrupt enable
-pub const MIE_MTIE: u64 = 1 << 7;  // machine timer interrupt enable
-pub const MIE_MEIE: u64 = 1 << 11; // machine external interrupt enable
-
-// Interrupt check 
-// Called every step: returns the highest-priority pending+enabled interrupt,
-// or None if interrupts are globally disabled or nothing is pending.
-pub fn pending_interrupt(mstatus: u64, mie: u64, mip: u64) -> Option<TrapCause> {
-    if mstatus & MSTATUS_MIE == 0 { return None; }
+pub fn pending_interrupt(mstatus: u64, mie: u64, mip: u64, priv_level: Privilege, mideleg: u64) -> Option<(TrapCause, bool)> {
+    let m_irqs: [(u64, TrapCause, bool); 3] = [
+        (MIP_MEIP, TrapCause::ExternalInterrupt, false),
+        (MIP_MTIP, TrapCause::TimerInterrupt,    false),
+        (MIP_MSIP, TrapCause::SoftwareInterrupt, false),
+    ];
+    let s_irqs: [(u64, TrapCause, bool); 3] = [
+        (MIP_SEIP, TrapCause::ExternalInterrupt, true),
+        (MIP_STIP, TrapCause::TimerInterrupt,    true),
+        (MIP_SSIP, TrapCause::SoftwareInterrupt, true),
+    ];
     let pending = mie & mip;
-    if pending & MIE_MEIE != 0 { return Some(TrapCause::ExternalInterrupt); }
-    if pending & MIE_MTIE != 0 { return Some(TrapCause::TimerInterrupt); }
-    if pending & MIE_MSIE != 0 { return Some(TrapCause::SoftwareInterrupt); }
+
+    match priv_level {
+        Privilege::M => {
+            if (mstatus & MSTATUS_MIE) != 0 {
+                for &(bit, ref cause, del) in &m_irqs {
+                    if pending & bit != 0 { return Some((*cause, del)); }
+                }
+            }
+        }
+        Privilege::S => {
+            // M-mode interrupts always enabled when in lower privilege
+            for &(bit, ref cause, _) in &m_irqs {
+                if pending & bit != 0 { return Some((*cause, false)); }
+            }
+            if (mstatus & MSTATUS_SIE) != 0 {
+                for &(bit, ref cause, _) in &s_irqs {
+                    if pending & bit != 0 {
+                        let delegated = (mideleg & bit) != 0;
+                        return Some((*cause, delegated));
+                    }
+                }
+            }
+        }
+        Privilege::U => {
+            // M-mode interrupts always enabled
+            for &(bit, ref cause, _) in &m_irqs {
+                if pending & bit != 0 { return Some((*cause, false)); }
+            }
+            // S-mode interrupts always enabled from U-mode
+            for &(bit, ref cause, _) in &s_irqs {
+                if pending & bit != 0 {
+                    let delegated = (mideleg & bit) != 0;
+                    return Some((*cause, delegated));
+                }
+            }
+        }
+    }
+
     None
 }
