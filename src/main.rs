@@ -196,9 +196,9 @@ fn vm_tick(cpu: &mut Cpu, bus: &mut Bus) -> StepResult {
             let a1 = cpu.regs[11];
             let a2 = cpu.regs[12];
             let a6 = cpu.regs[16];
-            let (ret, halt) = sbi::handle_sbi(a7, a0, a1, a2, a6, bus);
-            cpu.regs[10] = ret; // a0 = return value
-            if halt != 0 { return StepResult::Halted; }
+            let res = sbi::handle_sbi(a7, a0, a1, a2, a6, bus);
+            cpu.regs[10] = res.a0;
+            if res.halt { return StepResult::Halted; }
             cpu.pc = cpu.pc.wrapping_add(4);
         }
         _ => {}

@@ -118,7 +118,7 @@ pub fn generate_dtb() -> Vec<u8> {
 
     // Chosen
     f.begin_node("chosen");
-    f.prop_str("bootargs", "console=ttyS0 earlycon=uart8250,mmio,0x10000000");
+    f.prop_str("bootargs", "console=ttyS0 earlycon=uart8250,mmio,0x10000000 root=/dev/vda1 rw");
     f.prop_str("stdout-path", "/soc/uart@10000000");
     f.end_node();
 
@@ -144,6 +144,7 @@ pub fn generate_dtb() -> Vec<u8> {
     f.prop_str("status", "okay");
 
     f.begin_node("interrupt-controller");
+    f.prop_u32("phandle", 1);
     f.prop_cells("#interrupt-cells", &[1]);
     f.prop_empty("interrupt-controller");
     f.prop_str("compatible", "riscv,cpu-intc");
@@ -167,6 +168,7 @@ pub fn generate_dtb() -> Vec<u8> {
 
     // PLIC
     f.begin_node("plic@c000000");
+    f.prop_u32("phandle", 2);
     f.prop_str("compatible", "riscv,plic0");
     f.prop_cells("reg", &[0, 0xC000000, 0, 0x4000000]);
     f.prop_cells("interrupts-extended", &[0x01, 11, 0x01, 9]);

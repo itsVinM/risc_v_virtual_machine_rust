@@ -22,12 +22,17 @@ fn satp_ppn(satp: u64) -> u64 { satp & SATP_PPN }
 fn satp_mode(satp: u64) -> u64 { (satp >> 60) & 0xF }
 fn pte_ppn(pte: u64) -> u64 { (pte >> 10) & 0x00FF_FFFF_FFFF }
 
+fn csr_satp(csr: &CsrFile) -> u64 { csr.read(CSR_SATP, Privilege::M) }
+fn csr_mstatus(csr: &CsrFile) -> u64 { csr.mstatus() }
+
 const PTE_R: u64 = 1 << 1;
 const PTE_W: u64 = 1 << 2;
 const PTE_X: u64 = 1 << 3;
 const PTE_U: u64 = 1 << 4;
+const _PTE_A: u64 = 1 << 6;
+const _PTE_D: u64 = 1 << 7;
 
-fn translate(va: u64, priv_level: Privilege, bus: &Bus, satp: u64, access_type: AccessType) -> Result<u64, TrapCause> {
+fn translate(va: u64, priv_level: Privilege, bus: &Bus, satp: u64, mstatus: u64, access_type: AccessType) -> Result<u64, TrapCause> {
     if priv_level == Privilege::M {
         return Ok(va);
     }
@@ -37,6 +42,9 @@ fn translate(va: u64, priv_level: Privilege, bus: &Bus, satp: u64, access_type: 
     if satp_mode(satp) != SATP_MODE_SV39 {
         return Err(TrapCause::IllegalInstruction(0));
     }
+
+    let sum = (mstatus >> 18) & 1;
+    let mxr = (mstatus >> 19) & 1;
 
     let vpn = |level: u64| -> u64 { (va >> (12 + level * 9)) & 0x1FF };
     let root_ppn = satp_ppn(satp);
@@ -64,25 +72,27 @@ fn translate(va: u64, priv_level: Privilege, bus: &Bus, satp: u64, access_type: 
         return Err(TrapCause::LoadPageFault);
     }
 
+    // Permission check with SUM and MXR
+    let user_page = (pte & PTE_U) != 0;
+    let readable = pte & (PTE_R | PTE_X) != 0 || (mxr != 0 && pte & PTE_X != 0);
+    let writable = pte & (PTE_R | PTE_W) == (PTE_R | PTE_W);
+
+    if priv_level == Privilege::U && !user_page {
+        return Err(TrapCause::LoadPageFault);
+    }
+    if priv_level == Privilege::S && user_page && sum == 0 {
+        return Err(TrapCause::LoadPageFault);
+    }
+
+    match access_type {
+        AccessType::Read if !readable => return Err(TrapCause::LoadPageFault),
+        AccessType::Write if !writable => return Err(TrapCause::StorePageFault),
+        _ => {}
+    }
+
     let ppn = pte_ppn(pte);
     let offset = va & 0xFFF;
     let pa = (ppn << 12) | offset;
-
-    let perm_ok = match access_type {
-        AccessType::Read => pte & (PTE_R | PTE_X) != 0,
-        AccessType::Write => pte & (PTE_R | PTE_W) == (PTE_R | PTE_W),
-    };
-
-    if !perm_ok {
-        return Err(match access_type {
-            AccessType::Read => TrapCause::LoadPageFault,
-            AccessType::Write => TrapCause::StorePageFault,
-        });
-    }
-
-    if priv_level == Privilege::U && pte & PTE_U == 0 {
-        return Err(TrapCause::LoadPageFault);
-    }
 
     Ok(pa)
 }
@@ -129,7 +139,7 @@ pub fn execute(
 
         Inst::Lb  { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Read).unwrap_or(addr);
             match bus.read8(pa) {
                 Ok(v) => set!(rd, v as i8 as i64 as u64),
                 Err(e) => trap = Some(e),
@@ -137,7 +147,7 @@ pub fn execute(
         }
         Inst::Lh  { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Read).unwrap_or(addr);
             match bus.read16(pa) {
                 Ok(v) => set!(rd, v as i16 as i64 as u64),
                 Err(e) => trap = Some(e),
@@ -145,7 +155,7 @@ pub fn execute(
         }
         Inst::Lw  { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Read).unwrap_or(addr);
             match bus.read32(pa) {
                 Ok(v) => set!(rd, sext32(v)),
                 Err(e) => trap = Some(e),
@@ -153,7 +163,7 @@ pub fn execute(
         }
         Inst::Ld  { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Read).unwrap_or(addr);
             match bus.read64(pa) {
                 Ok(v) => set!(rd, v),
                 Err(e) => trap = Some(e),
@@ -161,38 +171,38 @@ pub fn execute(
         }
         Inst::Lbu { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Read).unwrap_or(addr);
             match bus.read8(pa) { Ok(v) => set!(rd, v as u64), Err(e) => trap = Some(e) }
         }
         Inst::Lhu { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Read).unwrap_or(addr);
             match bus.read16(pa) { Ok(v) => set!(rd, v as u64), Err(e) => trap = Some(e) }
         }
         Inst::Lwu { rd, rs1, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Read).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Read).unwrap_or(addr);
             match bus.read32(pa) { Ok(v) => set!(rd, v as u64), Err(e) => trap = Some(e) }
         }
 
         Inst::Sb { rs1, rs2, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Write).unwrap_or(addr);
             if let Err(e) = bus.write8(pa, reg!(rs2) as u8) { trap = Some(e); }
         }
         Inst::Sh { rs1, rs2, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Write).unwrap_or(addr);
             if let Err(e) = bus.write16(pa, reg!(rs2) as u16) { trap = Some(e); }
         }
         Inst::Sw { rs1, rs2, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Write).unwrap_or(addr);
             if let Err(e) = bus.write32(pa, reg!(rs2) as u32) { trap = Some(e); }
         }
         Inst::Sd { rs1, rs2, imm } => {
             let addr = reg!(rs1).wrapping_add(imm as u64);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Write).unwrap_or(addr);
             if let Err(e) = bus.write64(pa, reg!(rs2)) { trap = Some(e); }
         }
 
@@ -277,9 +287,23 @@ pub fn execute(
             set!(rd, if b == 0 { sext32(reg!(rs1) as u32) } else { sext32(reg!(rs1) as u32 % b) });
         }
 
+        Inst::AmoaddW { rd, rs1, rs2, aq: _, rl: _ } => {
+            let addr = reg!(rs1);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Write).unwrap_or(addr);
+            if let Ok(old) = bus.read32(pa) {
+                let sum = (old as u32).wrapping_add(reg!(rs2) as u32);
+                if bus.write32(pa, sum).is_ok() {
+                    set!(rd, old as i32 as i64 as u64);
+                } else {
+                    trap = Some(TrapCause::StoreAccessFault);
+                }
+            } else {
+                trap = Some(TrapCause::LoadAccessFault);
+            }
+        }
         Inst::AmoswapW { rd, rs1, rs2, aq: _, rl: _ } => {
             let addr = reg!(rs1);
-            let pa = translate(addr, priv_level, bus, csr.read(CSR_SATP, Privilege::M), AccessType::Write).unwrap_or(addr);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Write).unwrap_or(addr);
             if let Ok(old) = bus.read32(pa) {
                 if bus.write32(pa, reg!(rs2) as u32).is_ok() {
                     set!(rd, old as i32 as i64 as u64);
@@ -288,6 +312,40 @@ pub fn execute(
                 }
             } else {
                 trap = Some(TrapCause::LoadAccessFault);
+            }
+        }
+        Inst::LrW { rd, rs1, aq: _, rl: _ } => {
+            let addr = reg!(rs1);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Read).unwrap_or(addr);
+            match bus.read32(pa) {
+                Ok(v) => set!(rd, v as i32 as i64 as u64),
+                Err(e) => trap = Some(e),
+            }
+        }
+        Inst::ScW { rd, rs1, rs2, aq: _, rl: _ } => {
+            let addr = reg!(rs1);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Write).unwrap_or(addr);
+            if bus.write32(pa, reg!(rs2) as u32).is_ok() {
+                set!(rd, 0);
+            } else {
+                trap = Some(TrapCause::StoreAccessFault);
+            }
+        }
+        Inst::LrD { rd, rs1, aq: _, rl: _ } => {
+            let addr = reg!(rs1);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Read).unwrap_or(addr);
+            match bus.read64(pa) {
+                Ok(v) => set!(rd, v),
+                Err(e) => trap = Some(e),
+            }
+        }
+        Inst::ScD { rd, rs1, rs2, aq: _, rl: _ } => {
+            let addr = reg!(rs1);
+            let pa = translate(addr, priv_level, bus, csr_satp(csr), csr_mstatus(csr), AccessType::Write).unwrap_or(addr);
+            if bus.write64(pa, reg!(rs2)).is_ok() {
+                set!(rd, 0);
+            } else {
+                trap = Some(TrapCause::StoreAccessFault);
             }
         }
 

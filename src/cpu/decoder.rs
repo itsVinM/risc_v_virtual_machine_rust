@@ -5,7 +5,12 @@ pub enum Inst {
     // RV64I
     Lui   { rd: u8, imm: i64 },
     // A extension (atomics)
+    AmoaddW { rd: u8, rs1: u8, rs2: u8, aq: bool, rl: bool },
     AmoswapW { rd: u8, rs1: u8, rs2: u8, aq: bool, rl: bool },
+    LrW { rd: u8, rs1: u8, aq: bool, rl: bool },
+    ScW { rd: u8, rs1: u8, rs2: u8, aq: bool, rl: bool },
+    LrD { rd: u8, rs1: u8, aq: bool, rl: bool },
+    ScD { rd: u8, rs1: u8, rs2: u8, aq: bool, rl: bool },
     Auipc { rd: u8, imm: i64 },
     Jal   { rd: u8, imm: i64 },
     Jalr  { rd: u8, rs1: u8, imm: i64 },
@@ -227,7 +232,12 @@ pub fn decode(raw: u32) -> Inst {
             let aq = bit(raw, 26) != 0;
             let rl = bit(raw, 25) != 0;
             match (funct5, funct3) {
+                (0x00, 0x2) => Inst::AmoaddW { rd, rs1, rs2, aq, rl },
                 (0x01, 0x2) => Inst::AmoswapW { rd, rs1, rs2, aq, rl },
+                (0x02, 0x2) => Inst::LrW { rd, rs1, aq, rl },
+                (0x03, 0x2) => Inst::ScW { rd, rs1, rs2, aq, rl },
+                (0x02, 0x3) => Inst::LrD { rd, rs1, aq, rl },
+                (0x03, 0x3) => Inst::ScD { rd, rs1, rs2, aq, rl },
                 _ => Inst::Illegal(raw),
             }
         }

@@ -15,6 +15,7 @@ const QUEUE_READY: u64 = 0x044;
 const INTERRUPT_STATUS: u64 = 0x060;
 const INTERRUPT_ACK: u64 = 0x064;
 const STATUS:      u64 = 0x070;
+const CONFIG:      u64 = 0x100;
 const QUEUE_DESC_LOW: u64 = 0x080;
 const QUEUE_DESC_HIGH: u64 = 0x084;
 const QUEUE_DRIVER_LOW: u64 = 0x090;
@@ -79,6 +80,8 @@ impl Virtio {
             QUEUE_READY => self.queue_ready,
             INTERRUPT_STATUS => self.interrupt_status,
             STATUS => self.status,
+            CONFIG => (self.disk.len() / 512) as u32,
+            val if val == CONFIG + 4 => ((self.disk.len() / 512) >> 32) as u32,
             _ => 0,
         }
     }

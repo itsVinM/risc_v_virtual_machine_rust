@@ -1,0 +1,19 @@
+[package]
+name = "riscv64-rust-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+debug = true
+panic = "abort"
+overflow-checks = false
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+
+[dependencies]
+# No external dependencies.
