@@ -1,7 +1,7 @@
 use crate::traps::TrapCause;
 
-pub const UART_BASE: u64 = 0x1000_0000;
-pub const UART_END:  u64 = 0x1000_00FF;
+pub const UART_BASE: usize = 0x1000_0000;
+pub const UART_END:  usize = 0x1000_1000;
 
 // 8250 UART register offsets (DLAB=0)
 const THR: u64 = 0; // TX (write)
@@ -13,8 +13,8 @@ const MCR: u64 = 4; // Modem Control
 const LSR: u64 = 5; // Line Status
 const MSR: u64 = 6; // Modem Status
 
-const LSR_TX_EMPTY: u8 = 1 << 5;
-const LSR_TX_EMPTY_ALL: u8 = 1 << 6;
+const UART_LSR_TX_EMPTY: u64 = 1 << 5; 
+const UART_LSR_TX_EMPTY_ALL: u64 = 1 << 6; 
 
 pub struct Uart {
     out_buf: [u8; 4096],
@@ -28,46 +28,79 @@ pub struct Uart {
 
 impl Uart {
     pub fn new() -> Self {
-        Self { out_buf: [0; 4096], out_len: 0, ier: 0, lcr: 0, mcr: 0, dll: 0, dlm: 0 }
-    }
-
-    pub fn read8(&self, offset: u64) -> Result<u8, TrapCause> {
-        match offset {
-            0 if self.lcr & 0x80 != 0 => Ok(self.dll),
-            1 if self.lcr & 0x80 != 0 => Ok(self.dlm),
-            IER => Ok(self.ier),
-            LCR => Ok(self.lcr),
-            MCR => Ok(self.mcr),
-            LSR => Ok(LSR_TX_EMPTY | LSR_TX_EMPTY_ALL),
-            MSR => Ok(0xF0), // DCD+RI+DSR+CTS asserted
-            _ => Ok(0),
+        Self {
+            out_buf: [0; 4096],
+            out_len: 0,
+            ier: 0,
+            lcr: 0,
+            mcr: 0,
+            dll: 0,
+            dlm: 0,
         }
     }
 
-    pub fn flush_output(&mut self) -> &str {
-        if self.out_len == 0 { return ""; }
+    pub fn read8(&self, offset: usize) -> Result<u8, TrapCause> {
+        match offset {
+            THR => self.thr_read(),
+            IER => Ok(self.ier),
+            LCR => Ok(self.lcr),
+            MCR => Ok(self.mcr),
+            LSR => Ok(UART_LSR_TX_EMPTY | UART_LSR_TX_EMPTY_ALL),
+            MSR => Ok(0xF0), // DCDC +RI + DSR + CTS asserted
+            _ => Ok(0),
+        }
+    }
+    pub fn flush(&mut self) -> &str {
+        if self.out_len == 0 {
+            return "";
+        }
         let s = core::str::from_utf8(&self.out_buf[..self.out_len]).unwrap_or("");
         self.out_len = 0;
         s
     }
-
-    pub fn write8(&mut self, offset: u64, val: u8) -> Result<(), TrapCause> {
+    pub fn write8(&mut self, offset: usize, value: u8) -> Result<(), TrapCause> {
         match offset {
-            0 if self.lcr & 0x80 != 0 => self.dll = val,
-            1 if self.lcr & 0x80 != 0 => self.dlm = val,
-            THR => {
-                if val != b'\r' && self.out_len < self.out_buf.len() {
-                    self.out_buf[self.out_len] = val;
-                    self.out_len += 1;
-                }
-            }
-            IER => self.ier = val & 0x0F,
-            FCR => {} // ignore FIFO control
-            LCR => self.lcr = val,
-            MCR => self.mcr = val & 0x1F,
-            _ => {}
+            THR => self.thr_write(value),
+            IER => self.ier_write(value),
+            LCR => self.lcr_write(value),
+            MCR => self.mcr_write(value),
+            FCR => Ok(()), // ignore FIFO control
+            _ => Ok(()),
+        }
+    }
+
+    fn thr_read(&self) -> Result<u8, TrapCause> {
+        if self.out_len ==  0 {
+            Ok(0)
+        } 
+        assert!(self.out_len > 0);
+        let val = self.out_buf[0];
+        self.out_buf.rotate_left(1);
+        self.out_len -= 1;
+        Ok(val) 
+        
+    }
+
+    fn thr_write(&mut self, value: u8) -> Result<(), TrapCause> {
+        if self.out_len < self.out_buf.len() {
+            self.out_buf[self.out_len] = value;
+            self.out_len += 1;
         }
         Ok(())
     }
 
+    fn ier_write(&mut self, value: u8) -> Result<(), TrapCause> {
+        self.ier = value & 0x0F; // only lower 4 bits are valid
+        Ok(())
+    }
+
+    fn lcr_write(&mut self, value: u8) -> Result<(), TrapCause> {
+        self.lcr = value;
+        Ok(())
+    }
+
+    fn mcr_write(&mut self, value: u8) -> Result<(), TrapCause> {
+        self.mcr = value & 0x1F; // only lower 5 bits are valid
+        Ok(())
+    }
 }
