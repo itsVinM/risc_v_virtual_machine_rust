@@ -61,54 +61,54 @@ impl TrapCause {
     }
 }
 
-pub fn pending_interrupt(mstatus: u64, mie: u64, mip: u64, priv_level: Privilege, mideleg: u64) -> Option<(TrapCause, bool)> {
-    let m_irqs: [(u64, TrapCause, bool); 3] = [
-        (MIP_MEIP, TrapCause::ExternalInterrupt, false),
-        (MIP_MTIP, TrapCause::TimerInterrupt,    false),
-        (MIP_MSIP, TrapCause::SoftwareInterrupt, false),
-    ];
-    let s_irqs: [(u64, TrapCause, bool); 3] = [
-        (MIP_SEIP, TrapCause::ExternalInterrupt, true),
-        (MIP_STIP, TrapCause::TimerInterrupt,    true),
-        (MIP_SSIP, TrapCause::SoftwareInterrupt, true),
-    ];
+pub fn pending_interrupt(
+    mstatus: u64,
+    mie: u64,
+    mip: u64,
+    priv_level: Privilege,
+    mideleg: u64,
+) -> Option<(TrapCause, bool)> {
     let pending = mie & mip;
+    let m_irqs = [
+        (MIP_MEIP, TrapCause::ExternalInterrupt, true),
+        (MIP_MTIP, TrapCause::TimerInterrupt, true),
+        (MIP_MSIP, TrapCause::SoftwareInterrupt, true),
+    ];
+    let s_irqs = [
+        (MIP_SEIP, TrapCause::ExternalInterrupt, false),
+        (MIP_STIP, TrapCause::TimerInterrupt, false),
+        (MIP_SSIP, TrapCause::SoftwareInterrupt, false),
+    ];
 
-    match priv_level {
-        Privilege::M => {
-            if (mstatus & MSTATUS_MIE) != 0 {
-                for &(bit, ref cause, del) in &m_irqs {
-                    if pending & bit != 0 { return Some((*cause, del)); }
-                }
-            }
+    // Check M-mode interrupts
+    let m_enabled = match priv_level {
+        Privilege::M => (mstatus & MSTATUS_MIE) != 0,
+        Privilege::S | Privilege::U => true, // M-mode interrupts always enabled for S/U
+    };
+    if m_enabled {
+        if let Some(&(_, cause, delegated)) = m_irqs
+            .iter()
+            .find(|&&(mask, _, _)| (pending & mask) != 0)
+        {
+            return Some((cause, delegated));
         }
-        Privilege::S => {
-            // M-mode interrupts always enabled when in lower privilege
-            for &(bit, ref cause, _) in &m_irqs {
-                if pending & bit != 0 { return Some((*cause, false)); }
+    }
+
+    // For M-mode, no further checks
+    if priv_level == Privilege::M {return None;}
+
+    // Check S-mode interrupts
+    let s_enabled = match priv_level {
+        Privilege::S => (mstatus & MSTATUS_SIE) != 0,
+        Privilege::U => true, // S-mode interrupts always enabled for U
+        Privilege::M => unreachable!(),
+    };
+    if s_enabled {
+        if let Some(&(bit, cause, _)) = s_irqs
+            .iter()
+            .find(|&&(bit, _, _) | pending & bit != 0 && (mideleg & bit) != 0) {
+                return Some((cause, true));
             }
-            if (mstatus & MSTATUS_SIE) != 0 {
-                for &(bit, ref cause, _) in &s_irqs {
-                    if pending & bit != 0 {
-                        let delegated = (mideleg & bit) != 0;
-                        return Some((*cause, delegated));
-                    }
-                }
-            }
-        }
-        Privilege::U => {
-            // M-mode interrupts always enabled
-            for &(bit, ref cause, _) in &m_irqs {
-                if pending & bit != 0 { return Some((*cause, false)); }
-            }
-            // S-mode interrupts always enabled from U-mode
-            for &(bit, ref cause, _) in &s_irqs {
-                if pending & bit != 0 {
-                    let delegated = (mideleg & bit) != 0;
-                    return Some((*cause, delegated));
-                }
-            }
-        }
     }
 
     None
