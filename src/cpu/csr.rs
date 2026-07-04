@@ -194,3 +194,179 @@ pub fn csr_access_ok(addr: usize, priv_level: Privilege) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- csr_access_ok ----
+    #[test]
+    fn test_m_can_read_anything() {
+        assert!(csr_access_ok(0x300, Privilege::M));
+        assert!(csr_access_ok(0x100, Privilege::M));
+        assert!(csr_access_ok(0x000, Privilege::M));
+        assert!(csr_access_ok(0xFFF, Privilege::M));
+    }
+    #[test]
+    fn test_s_can_read_s_csrs() {
+        assert!(csr_access_ok(0x100, Privilege::S)); // sstatus
+        assert!(csr_access_ok(0x105, Privilege::S)); // stvec
+        assert!(csr_access_ok(0x180, Privilege::S)); // satp
+        assert!(csr_access_ok(0x1FF, Privilege::S)); // top of S range
+    }
+    #[test]
+    fn test_s_cannot_read_m_csrs() {
+        assert!(!csr_access_ok(0x300, Privilege::S));
+        assert!(!csr_access_ok(0x341, Privilege::S));
+        assert!(!csr_access_ok(0x3FF, Privilege::S));
+    }
+    #[test]
+    fn test_s_can_read_counters() {
+        assert!(csr_access_ok(0xC00, Privilege::S)); // cycle
+        assert!(csr_access_ok(0xC01, Privilege::S)); // time
+        assert!(csr_access_ok(0xC02, Privilege::S)); // instret
+        assert!(csr_access_ok(0xC1F, Privilege::S));
+        assert!(csr_access_ok(0xC80, Privilege::S));
+        assert!(csr_access_ok(0xC9F, Privilege::S));
+    }
+    #[test]
+    fn test_u_cannot_read_m_csrs() {
+        assert!(!csr_access_ok(0x300, Privilege::U));
+        assert!(!csr_access_ok(0x100, Privilege::U));
+    }
+    #[test]
+    fn test_u_can_read_counters() {
+        assert!(csr_access_ok(0xC00, Privilege::U));
+        assert!(csr_access_ok(0xC80, Privilege::U));
+    }
+
+    // ---- CsrFile construction ----
+    #[test]
+    fn test_new_csr_misa() {
+        let csr = CsrFile::new();
+        let misa = csr.read(CSR_MISA, Privilege::M);
+        assert!(misa & (1 << 0) != 0); // A extension
+        assert!(misa & (1 << 8) != 0); // I extension
+        assert!(misa & (1 << 12) != 0); // M extension
+        assert!((misa >> 62) == 2); // MXL = 2 (RV64)
+    }
+    #[test]
+    fn test_new_csr_deleg() {
+        let csr = CsrFile::new();
+        let medeleg = csr.read(CSR_MEDELEG, Privilege::M);
+        assert_eq!(medeleg, (1 << 3) | (1 << 8) | (1 << 9) | (1 << 12) | (1 << 13) | (1 << 15));
+        let mideleg = csr.read(CSR_MIDELEG, Privilege::M);
+        assert_eq!(mideleg, MIP_SSIP | MIP_STIP | MIP_SEIP);
+    }
+
+    // ---- CSR read/write ----
+    #[test]
+    fn test_read_write_mstatus() {
+        let mut csr = CsrFile::new();
+        csr.write(CSR_MSTATUS, 0xFFFFFFFFFFFFFFFF, Privilege::M);
+        assert_eq!(csr.read(CSR_MSTATUS, Privilege::M), 0xFFFFFFFFFFFFFFFF);
+    }
+    #[test]
+    fn test_sstatus_masks_mstatus() {
+        let mut csr = CsrFile::new();
+        csr.write(CSR_MSTATUS, 0xFFFFFFFFFFFFFFFF, Privilege::M);
+        // sstatus only exposes SPP, SPIE, SIE, FS, XS, VS, SUM, MXR
+        let mask = MSTATUS_SPP | MSTATUS_SPIE | MSTATUS_SIE | MSTATUS_FS | MSTATUS_XS | MSTATUS_VS | MSTATUS_SUM | MSTATUS_MXR;
+        let sstatus_val = csr.read(CSR_SSTATUS, Privilege::S);
+        assert_eq!(sstatus_val, 0xFFFFFFFFFFFFFFFF & mask);
+        assert_eq!(sstatus_val & !mask, 0);
+    }
+    #[test]
+    fn test_sstatus_write_masking() {
+        let mut csr = CsrFile::new();
+        csr.write(CSR_MSTATUS, 0, Privilege::M);
+        let mask = MSTATUS_SPP | MSTATUS_SPIE | MSTATUS_SIE | MSTATUS_FS | MSTATUS_XS | MSTATUS_VS | MSTATUS_SUM | MSTATUS_MXR;
+        csr.write(CSR_SSTATUS, 0xFFFFFFFFFFFFFFFF, Privilege::S);
+        let mstatus = csr.read(CSR_MSTATUS, Privilege::M);
+        assert_eq!(mstatus, mask);
+        assert_eq!(mstatus & !mask, 0);
+    }
+    #[test]
+    fn test_sie_masking_via_mideleg() {
+        let mut csr = CsrFile::new();
+        // CSRs SIE writes only affect delegated bits (SSIP, STIP, SEIP)
+        csr.write(CSR_SIE, 0xFFFFFFFFFFFFFFFF, Privilege::S);
+        let mie = csr.read(CSR_MIE, Privilege::M);
+        assert_eq!(mie, MIP_SSIP | MIP_STIP | MIP_SEIP);
+    }
+    #[test]
+    fn test_read_counter_in_any_mode() {
+        let mut csr = CsrFile::new();
+        csr.write(CSR_CYCLE, 42, Privilege::M);
+        assert_eq!(csr.read(CSR_CYCLE, Privilege::S), 42);
+        assert_eq!(csr.read(CSR_CYCLE, Privilege::U), 42);
+    }
+    #[test]
+    fn test_write_counter_noop() {
+        let mut csr = CsrFile::new();
+        csr.write(CSR_CYCLE, 42, Privilege::M);
+        assert_eq!(csr.read(CSR_CYCLE, Privilege::M), 0); // writes to cycle are ignored
+    }
+
+    // ---- MIP handling ----
+    #[test]
+    fn test_mip_timer() {
+        let mut csr = CsrFile::new();
+        assert_eq!(csr.mip() & MIP_MTIP, 0);
+        csr.set_mip_timer();
+        assert!(csr.mip() & MIP_MTIP != 0);
+        csr.clear_mip_timer();
+        assert_eq!(csr.mip() & MIP_MTIP, 0);
+    }
+    #[test]
+    fn test_mip_ssip() {
+        let mut csr = CsrFile::new();
+        csr.set_mip_ssip();
+        assert!(csr.mip() & MIP_SSIP != 0);
+        csr.clear_mip_ssip();
+        assert_eq!(csr.mip() & MIP_SSIP, 0);
+    }
+    #[test]
+    fn test_inc_cycle_and_instret() {
+        let mut csr = CsrFile::new();
+        assert_eq!(csr.read(CSR_CYCLE, Privilege::M), 0);
+        assert_eq!(csr.read(CSR_INSTRET, Privilege::M), 0);
+        csr.inc_cycle();
+        csr.inc_instret();
+        csr.inc_instret();
+        assert_eq!(csr.read(CSR_CYCLE, Privilege::M), 1);
+        assert_eq!(csr.read(CSR_INSTRET, Privilege::M), 2);
+    }
+
+    // ---- SSTC ----
+    #[test]
+    fn test_sstc_disabled_by_default() {
+        let csr = CsrFile::new();
+        assert!(!csr.sstc_enabled());
+    }
+    #[test]
+    fn test_sstc_enable() {
+        let mut csr = CsrFile::new();
+        csr.write(CSR_MENVCFG, MENVCFG_STCE, Privilege::M);
+        assert!(csr.sstc_enabled());
+    }
+    #[test]
+    fn test_stimecmp_access_when_sstc_disabled() {
+        let mut csr = CsrFile::new();
+        csr.write(CSR_STIMECMP, 100, Privilege::S);
+        assert_eq!(csr.stimecmp(), u64::MAX); // S-mode write ignored when SSTC disabled
+    }
+
+    // ---- Privilege ----
+    #[test]
+    fn test_privilege_bits() {
+        assert_eq!(Privilege::U.bits(), 0);
+        assert_eq!(Privilege::S.bits(), 1);
+        assert_eq!(Privilege::M.bits(), 3);
+    }
+    #[test]
+    fn test_privilege_ordering() {
+        assert!(Privilege::U < Privilege::S);
+        assert!(Privilege::S < Privilege::M);
+    }
+}

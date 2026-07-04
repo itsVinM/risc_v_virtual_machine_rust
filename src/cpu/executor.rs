@@ -448,3 +448,321 @@ pub fn execute(
 
     ExecResult { next_pc, trap, halt, new_priv }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpu::csr::Privilege;
+    use crate::mmu::Mmu;
+    use crate::cpu::decoder::Inst;
+    use crate::cpu::csr::CSR_MSTATUS;
+
+    fn run(inst: Inst, regs: &mut [u64; 32], csr: &mut CsrFile) -> ExecResult {
+        let mut bus = Mmu::new(&[]);
+        execute(inst, 0x1000, regs, csr, &mut bus, Privilege::M)
+    }
+    fn r(val: [u64; 32]) -> [u64; 32] { val }
+
+    // ---- ALU immediate ----
+    #[test]
+    fn test_addi_exec() {
+        let mut regs = r([0; 32]); regs[1] = 5;
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Addi { rd: 2, rs1: 1, imm: 3 }, &mut regs, &mut csr);
+        assert_eq!(regs[2], 8);
+        assert_eq!(res.next_pc, 0x1004);
+    }
+    #[test]
+    fn test_addi_neg() {
+        let mut regs = r([0; 32]); regs[1] = 5;
+        let mut csr = CsrFile::new();
+        run(Inst::Addi { rd: 2, rs1: 1, imm: -3 }, &mut regs, &mut csr);
+        assert_eq!(regs[2], 2);
+    }
+    #[test]
+    fn test_addi_zero_rd() {
+        let mut regs = r([0; 32]); regs[1] = 5;
+        let mut csr = CsrFile::new();
+        run(Inst::Addi { rd: 0, rs1: 1, imm: 42 }, &mut regs, &mut csr);
+        assert_eq!(regs[0], 0); // x0 stays zero
+    }
+    #[test]
+    fn test_slti_exec() {
+        let mut regs = r([0; 32]); regs[1] = 5;
+        let mut csr = CsrFile::new();
+        run(Inst::Slti { rd: 2, rs1: 1, imm: 10 }, &mut regs, &mut csr);
+        assert_eq!(regs[2], 1);
+        run(Inst::Slti { rd: 2, rs1: 1, imm: 3 }, &mut regs, &mut csr);
+        assert_eq!(regs[2], 0);
+    }
+
+    // ---- ALU register ----
+    #[test]
+    fn test_add_exec() {
+        let mut regs = r([0; 32]); regs[1] = 10; regs[2] = 20;
+        let mut csr = CsrFile::new();
+        run(Inst::Add { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], 30);
+    }
+    #[test]
+    fn test_sub_exec() {
+        let mut regs = r([0; 32]); regs[1] = 20; regs[2] = 10;
+        let mut csr = CsrFile::new();
+        run(Inst::Sub { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], 10);
+    }
+    #[test]
+    fn test_xor_exec() {
+        let mut regs = r([0; 32]); regs[1] = 0xFF00; regs[2] = 0x0FF0;
+        let mut csr = CsrFile::new();
+        run(Inst::Xor { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], 0xF0F0);
+    }
+    #[test]
+    fn test_or_exec() {
+        let mut regs = r([0; 32]); regs[1] = 0xFF00; regs[2] = 0x0FF0;
+        let mut csr = CsrFile::new();
+        run(Inst::Or { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], 0xFFF0);
+    }
+    #[test]
+    fn test_and_exec() {
+        let mut regs = r([0; 32]); regs[1] = 0xFF00; regs[2] = 0x0FF0;
+        let mut csr = CsrFile::new();
+        run(Inst::And { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], 0x0F00);
+    }
+
+    // ---- Shifts ----
+    #[test]
+    fn test_slli_exec() {
+        let mut regs = r([0; 32]); regs[1] = 5;
+        let mut csr = CsrFile::new();
+        run(Inst::Slli { rd: 2, rs1: 1, shamt: 3 }, &mut regs, &mut csr);
+        assert_eq!(regs[2], 40);
+    }
+    #[test]
+    fn test_srli_exec() {
+        let mut regs = r([0; 32]); regs[1] = 0x100;
+        let mut csr = CsrFile::new();
+        run(Inst::Srli { rd: 2, rs1: 1, shamt: 4 }, &mut regs, &mut csr);
+        assert_eq!(regs[2], 0x10);
+    }
+    #[test]
+    fn test_srai_exec() {
+        let mut regs = r([0; 32]); regs[1] = -256i64 as u64;
+        let mut csr = CsrFile::new();
+        run(Inst::Srai { rd: 2, rs1: 1, shamt: 4 }, &mut regs, &mut csr);
+        assert_eq!(regs[2] as i64, -16);
+    }
+
+    // ---- M-extension ----
+    #[test]
+    fn test_mul_exec() {
+        let mut regs = r([0; 32]); regs[1] = 1000; regs[2] = 2000;
+        let mut csr = CsrFile::new();
+        run(Inst::Mul { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], 2_000_000);
+    }
+    #[test]
+    fn test_mulh_exec() {
+        let mut regs = r([0; 32]);
+        regs[1] = 0xABCD_EF01_2345_6789u64 as i64 as u64;
+        regs[2] = 0x1234_5678_9ABC_DEF0u64 as i64 as u64;
+        let mut csr = CsrFile::new();
+        run(Inst::Mulh { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        let a = regs[1] as i64 as i128;
+        let b = regs[2] as i64 as i128;
+        assert_eq!(regs[3], ((a * b) >> 64) as u64);
+    }
+    #[test]
+    fn test_divu_exec() {
+        let mut regs = r([0; 32]); regs[1] = 100; regs[2] = 7;
+        let mut csr = CsrFile::new();
+        run(Inst::Divu { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], 14);
+    }
+    #[test]
+    fn test_div_by_zero() {
+        let mut regs = r([0; 32]); regs[1] = 100; regs[2] = 0;
+        let mut csr = CsrFile::new();
+        run(Inst::Div { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], u64::MAX);
+    }
+    #[test]
+    fn test_rem_by_zero() {
+        let mut regs = r([0; 32]); regs[1] = 100; regs[2] = 0;
+        let mut csr = CsrFile::new();
+        run(Inst::Rem { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], 100);
+    }
+    #[test]
+    fn test_div_overflow() {
+        let mut regs = r([0; 32]);
+        regs[1] = i64::MIN as u64;
+        regs[2] = -1i64 as u64;
+        let mut csr = CsrFile::new();
+        run(Inst::Div { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], i64::MIN as u64);
+    }
+
+    // ---- JAL and branches ----
+    #[test]
+    fn test_jal_exec() {
+        let mut regs = r([0; 32]);
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Jal { rd: 1, imm: 0x100 }, &mut regs, &mut csr);
+        assert_eq!(regs[1], 0x1004); // return address = pc+4
+        assert_eq!(res.next_pc, 0x1100);
+    }
+    #[test]
+    fn test_jalr_exec() {
+        let mut regs = r([0; 32]); regs[2] = 0x2000;
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Jalr { rd: 1, rs1: 2, imm: 0x100 }, &mut regs, &mut csr);
+        assert_eq!(regs[1], 0x1004);
+        assert_eq!(res.next_pc, 0x2100);
+    }
+    #[test]
+    fn test_beq_taken() {
+        let mut regs = r([0; 32]); regs[1] = 42; regs[2] = 42;
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Beq { rs1: 1, rs2: 2, imm: 0x20 }, &mut regs, &mut csr);
+        assert_eq!(res.next_pc, 0x1020);
+    }
+    #[test]
+    fn test_beq_not_taken() {
+        let mut regs = r([0; 32]); regs[1] = 42; regs[2] = 43;
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Beq { rs1: 1, rs2: 2, imm: 0x20 }, &mut regs, &mut csr);
+        assert_eq!(res.next_pc, 0x1004);
+    }
+    #[test]
+    fn test_blt_taken() {
+        let mut regs = r([0; 32]); regs[1] = 5; regs[2] = 10;
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Blt { rs1: 1, rs2: 2, imm: 0x30 }, &mut regs, &mut csr);
+        assert_eq!(res.next_pc, 0x1030);
+    }
+    #[test]
+    fn test_bge_taken() {
+        let mut regs = r([0; 32]); regs[1] = 10; regs[2] = 5;
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Bge { rs1: 1, rs2: 2, imm: 0x30 }, &mut regs, &mut csr);
+        assert_eq!(res.next_pc, 0x1030);
+    }
+    #[test]
+    fn test_bltu() {
+        let mut regs = r([0; 32]); regs[1] = 5; regs[2] = 10;
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Bltu { rs1: 1, rs2: 2, imm: 0x40 }, &mut regs, &mut csr);
+        assert_eq!(res.next_pc, 0x1040);
+    }
+
+    // ---- LUI and AUIPC ----
+    #[test]
+    fn test_lui_exec() {
+        let mut regs = r([0; 32]);
+        let mut csr = CsrFile::new();
+        run(Inst::Lui { rd: 1, imm: 0x12345000 }, &mut regs, &mut csr);
+        assert_eq!(regs[1], 0x12345000);
+    }
+    #[test]
+    fn test_auipc_exec() {
+        let mut regs = r([0; 32]);
+        let mut csr = CsrFile::new();
+        run(Inst::Auipc { rd: 1, imm: 0x1000 }, &mut regs, &mut csr);
+        assert_eq!(regs[1], 0x2000); // pc=0x1000 + imm=0x1000
+    }
+
+    // ---- 32-bit ops ----
+    #[test]
+    fn test_addiw_exec() {
+        let mut regs = r([0; 32]); regs[1] = 0xFFFFFFFFu64 as u64;
+        let mut csr = CsrFile::new();
+        run(Inst::Addiw { rd: 2, rs1: 1, imm: 1 }, &mut regs, &mut csr);
+        assert_eq!(regs[2], 0); // 0xFFFFFFFF + 1 = 0, sign-extended from 32-bit
+    }
+    #[test]
+    fn test_addw_exec() {
+        let mut regs = r([0; 32]); regs[1] = 0xFFFFFFFFu64 as u64; regs[2] = 2;
+        let mut csr = CsrFile::new();
+        run(Inst::Addw { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], 1); // 0xFFFFFFFF + 2 = 1 (32-bit) then sign-extended
+    }
+    #[test]
+    fn test_mulw_exec() {
+        let mut regs = r([0; 32]); regs[1] = 100_000; regs[2] = 200_000;
+        let mut csr = CsrFile::new();
+        run(Inst::Mulw { rd: 3, rs1: 1, rs2: 2 }, &mut regs, &mut csr);
+        assert_eq!(regs[3], ((100_000u64 * 200_000) as u32) as i32 as i64 as u64);
+    }
+
+    // ---- CSR ----
+    #[test]
+    fn test_csrrw_exec() {
+        let mut regs = r([0; 32]); regs[10] = 0xABCD;
+        let mut csr = CsrFile::new();
+        run(Inst::Csrrw { rd: 1, rs1: 10, csr: 0x300 }, &mut regs, &mut csr);
+        assert_eq!(regs[1], 0); // old mstatus was 0
+        assert_eq!(csr.read(CSR_MSTATUS, Privilege::M), 0xABCD);
+    }
+    #[test]
+    fn test_csrrs_exec() {
+        let mut regs = r([0; 32]); regs[10] = 0x8; // MSTATUS.MPIE=1
+        let mut csr = CsrFile::new();
+        run(Inst::Csrrs { rd: 1, rs1: 10, csr: 0x300 }, &mut regs, &mut csr);
+        assert_eq!(regs[1], 0); // old mstatus had no MIE
+        assert!(csr.read(CSR_MSTATUS, Privilege::M) & (1 << 7) != 0);
+    }
+
+    // ---- System ----
+    #[test]
+    fn test_ecall_m() {
+        let mut regs = r([0; 32]);
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Ecall, &mut regs, &mut csr);
+        assert_eq!(res.trap, Some(TrapCause::EcallFromM));
+    }
+    #[test]
+    fn test_ebreak_halt() {
+        let mut regs = r([0; 32]);
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Ebreak, &mut regs, &mut csr);
+        assert!(res.halt);
+    }
+    #[test]
+    fn test_mret_exec() {
+        let mut regs = r([0; 32]);
+        let mut csr = CsrFile::new();
+        csr.write(CSR_MEPC, 0x2000, Privilege::M);
+        csr.write(CSR_MSTATUS, (3 << 11) | (1 << 7), Privilege::M); // MPP=3 (M), MPIE=1
+        let res = run(Inst::Mret, &mut regs, &mut csr);
+        assert_eq!(res.next_pc, 0x2000);
+    }
+    #[test]
+    fn test_sret_requires_s_mode() {
+        let mut regs = r([0; 32]);
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Sret, &mut regs, &mut csr);
+        assert_eq!(res.trap, Some(TrapCause::IllegalInstruction(0x10200073)));
+    }
+    #[test]
+    fn test_fence_noop() {
+        let mut regs = r([0; 32]);
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Fence, &mut regs, &mut csr);
+        assert_eq!(res.next_pc, 0x1004);
+        assert!(res.trap.is_none());
+    }
+
+    // ---- Illegal instruction ----
+    #[test]
+    fn test_illegal_trap() {
+        let mut regs = r([0; 32]);
+        let mut csr = CsrFile::new();
+        let res = run(Inst::Illegal(0xFFFFFFFF), &mut regs, &mut csr);
+        assert_eq!(res.trap, Some(TrapCause::IllegalInstruction(0xFFFFFFFF)));
+    }
+}
+

@@ -16,6 +16,8 @@ cargo run -- --sbi --debug kernel             # with debugger
 
 ## Debugger
 
+![debug](debug.png)
+
 | Command | Description |
 |---------|-------------|
 | `s` | Step one instruction |

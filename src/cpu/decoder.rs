@@ -267,3 +267,305 @@ pub fn decode(raw: u32) -> Inst {
         _    => Inst::Illegal(raw),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(funct7: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32) -> u32 {
+        (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x33
+    }
+    fn rw(funct7: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32) -> u32 {
+        (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x3B
+    }
+    fn i(imm: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
+        (imm << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+    }
+    fn iw(imm: u32, rs1: u32, funct3: u32, rd: u32) -> u32 {
+        (imm << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x1B
+    }
+    fn s(imm: u32, rs2: u32, rs1: u32, funct3: u32) -> u32 {
+        let imm_hi = (imm >> 5) & 0x7F;
+        let imm_lo = imm & 0x1F;
+        (imm_hi << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm_lo << 7) | 0x23
+    }
+    fn b(imm: u32, rs2: u32, rs1: u32, funct3: u32) -> u32 {
+        let bit12 = (imm >> 12) & 1;
+        let bit11 = (imm >> 11) & 1;
+        let bits_10_5 = (imm >> 5) & 0x3F;
+        let bits_4_1 = (imm >> 1) & 0xF;
+        (bit12 << 31) | (bits_10_5 << 25) | (rs2 << 20) | (rs1 << 15)
+            | (funct3 << 12) | (bits_4_1 << 8) | (bit11 << 7) | 0x63
+    }
+    fn u(imm: u32, rd: u32, opcode: u32) -> u32 {
+        imm & 0xFFFFF000 | (rd << 7) | opcode
+    }
+    fn j(imm: u32, rd: u32) -> u32 {
+        let bit20 = (imm >> 20) & 1;
+        let bits_10_1 = (imm >> 1) & 0x3FF;
+        let bit11 = (imm >> 11) & 1;
+        let bits_19_12 = (imm >> 12) & 0xFF;
+        (bit20 << 31) | (bits_10_1 << 21) | (bit11 << 20) | (bits_19_12 << 12) | (rd << 7) | 0x6F
+    }
+    // ---- RV64I R-type ----
+    #[test]
+    fn test_add() { assert_eq!(decode(r(0x00, 3, 2, 0, 1)), Inst::Add { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_sub() { assert_eq!(decode(r(0x20, 3, 2, 0, 1)), Inst::Sub { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_sll() { assert_eq!(decode(r(0x00, 3, 2, 1, 1)), Inst::Sll { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_slt() { assert_eq!(decode(r(0x00, 3, 2, 2, 1)), Inst::Slt { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_sltu() { assert_eq!(decode(r(0x00, 3, 2, 3, 1)), Inst::Sltu { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_xor() { assert_eq!(decode(r(0x00, 3, 2, 4, 1)), Inst::Xor { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_srl() { assert_eq!(decode(r(0x00, 3, 2, 5, 1)), Inst::Srl { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_sra() { assert_eq!(decode(r(0x20, 3, 2, 5, 1)), Inst::Sra { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_or()  { assert_eq!(decode(r(0x00, 3, 2, 6, 1)), Inst::Or  { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_and() { assert_eq!(decode(r(0x00, 3, 2, 7, 1)), Inst::And { rd: 1, rs1: 2, rs2: 3 }); }
+
+    // ---- RV64M R-type ----
+    #[test]
+    fn test_mul()    { assert_eq!(decode(r(0x01, 3, 2, 0, 1)), Inst::Mul    { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_mulh()   { assert_eq!(decode(r(0x01, 3, 2, 1, 1)), Inst::Mulh   { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_mulhsu() { assert_eq!(decode(r(0x01, 3, 2, 2, 1)), Inst::Mulhsu { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_mulhu()  { assert_eq!(decode(r(0x01, 3, 2, 3, 1)), Inst::Mulhu  { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_div()    { assert_eq!(decode(r(0x01, 3, 2, 4, 1)), Inst::Div    { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_divu()   { assert_eq!(decode(r(0x01, 3, 2, 5, 1)), Inst::Divu   { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_rem()    { assert_eq!(decode(r(0x01, 3, 2, 6, 1)), Inst::Rem    { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_remu()   { assert_eq!(decode(r(0x01, 3, 2, 7, 1)), Inst::Remu   { rd: 1, rs1: 2, rs2: 3 }); }
+
+    // ---- RV64I I-type (ALU immediate) ----
+    #[test]
+    fn test_addi() { assert_eq!(decode(i(0x7FF, 2, 0, 1, 0x13)), Inst::Addi { rd: 1, rs1: 2, imm: -1 }); }
+    #[test]
+    fn test_addi_zero() { assert_eq!(decode(i(0, 0, 0, 0, 0x13)), Inst::Addi { rd: 0, rs1: 0, imm: 0 }); }
+    #[test]
+    fn test_slti() { assert_eq!(decode(i(10, 2, 2, 1, 0x13)), Inst::Slti { rd: 1, rs1: 2, imm: 10 }); }
+    #[test]
+    fn test_sltiu() { assert_eq!(decode(i(10, 2, 3, 1, 0x13)), Inst::Sltiu { rd: 1, rs1: 2, imm: 10 }); }
+    #[test]
+    fn test_xori() { assert_eq!(decode(i(0xFF, 2, 4, 1, 0x13)), Inst::Xori { rd: 1, rs1: 2, imm: 0xFF }); }
+    #[test]
+    fn test_ori()  { assert_eq!(decode(i(0xFF, 2, 6, 1, 0x13)), Inst::Ori  { rd: 1, rs1: 2, imm: 0xFF }); }
+    #[test]
+    fn test_andi() { assert_eq!(decode(i(0xFF, 2, 7, 1, 0x13)), Inst::Andi { rd: 1, rs1: 2, imm: 0xFF }); }
+
+    // ---- Shifts (I-type with funct3=1/5) ----
+    #[test]
+    fn test_slli() {
+        let raw = (0 << 26) | (5 << 20) | (2 << 15) | (1 << 12) | (1 << 7) | 0x13;
+        assert_eq!(decode(raw), Inst::Slli { rd: 1, rs1: 2, shamt: 5 });
+    }
+    #[test]
+    fn test_srli() {
+        let raw = (0 << 26) | (5 << 20) | (2 << 15) | (5 << 12) | (1 << 7) | 0x13;
+        assert_eq!(decode(raw), Inst::Srli { rd: 1, rs1: 2, shamt: 5 });
+    }
+    #[test]
+    fn test_srai() {
+        let raw = (0x10 << 26) | (5 << 20) | (2 << 15) | (5 << 12) | (1 << 7) | 0x13;
+        assert_eq!(decode(raw), Inst::Srai { rd: 1, rs1: 2, shamt: 5 });
+    }
+
+    // ---- U-type ----
+    #[test]
+    fn test_lui() {
+        assert_eq!(decode(u(0x12345000, 1, 0x37)), Inst::Lui { rd: 1, imm: 0x12345000 });
+    }
+    #[test]
+    fn test_auipc() {
+        assert_eq!(decode(u(0x12345000, 1, 0x17)), Inst::Auipc { rd: 1, imm: 0x12345000 });
+    }
+
+    // ---- J-type ----
+    #[test]
+    fn test_jal() {
+        assert_eq!(decode(j(0x100, 1)), Inst::Jal { rd: 1, imm: 0x100 });
+    }
+    #[test]
+    fn test_jal_neg() {
+        assert_eq!(decode(j(0xFFFFF, 1)), Inst::Jal { rd: 1, imm: -1 });
+    }
+
+    // ---- I-type (JALR) ----
+    #[test]
+    fn test_jalr() {
+        assert_eq!(decode(i(0x100, 2, 0, 1, 0x67)), Inst::Jalr { rd: 1, rs1: 2, imm: 0x100 });
+    }
+
+    // ---- B-type ----
+    #[test]
+    fn test_beq()  { assert_eq!(decode(b(8, 3, 2, 0)), Inst::Beq  { rs1: 2, rs2: 3, imm: 8 }); }
+    #[test]
+    fn test_bne()  { assert_eq!(decode(b(8, 3, 2, 1)), Inst::Bne  { rs1: 2, rs2: 3, imm: 8 }); }
+    #[test]
+    fn test_blt()  { assert_eq!(decode(b(8, 3, 2, 4)), Inst::Blt  { rs1: 2, rs2: 3, imm: 8 }); }
+    #[test]
+    fn test_bge()  { assert_eq!(decode(b(8, 3, 2, 5)), Inst::Bge  { rs1: 2, rs2: 3, imm: 8 }); }
+    #[test]
+    fn test_bltu() { assert_eq!(decode(b(8, 3, 2, 6)), Inst::Bltu { rs1: 2, rs2: 3, imm: 8 }); }
+    #[test]
+    fn test_bgeu() { assert_eq!(decode(b(8, 3, 2, 7)), Inst::Bgeu { rs1: 2, rs2: 3, imm: 8 }); }
+
+    // ---- I-type (loads) ----
+    #[test]
+    fn test_lb()  { assert_eq!(decode(i(0x100, 2, 0, 1, 0x03)), Inst::Lb  { rd: 1, rs1: 2, imm: 0x100 }); }
+    #[test]
+    fn test_lh()  { assert_eq!(decode(i(0x100, 2, 1, 1, 0x03)), Inst::Lh  { rd: 1, rs1: 2, imm: 0x100 }); }
+    #[test]
+    fn test_lw()  { assert_eq!(decode(i(0x100, 2, 2, 1, 0x03)), Inst::Lw  { rd: 1, rs1: 2, imm: 0x100 }); }
+    #[test]
+    fn test_ld()  { assert_eq!(decode(i(0x100, 2, 3, 1, 0x03)), Inst::Ld  { rd: 1, rs1: 2, imm: 0x100 }); }
+    #[test]
+    fn test_lbu() { assert_eq!(decode(i(0x100, 2, 4, 1, 0x03)), Inst::Lbu { rd: 1, rs1: 2, imm: 0x100 }); }
+    #[test]
+    fn test_lhu() { assert_eq!(decode(i(0x100, 2, 5, 1, 0x03)), Inst::Lhu { rd: 1, rs1: 2, imm: 0x100 }); }
+    #[test]
+    fn test_lwu() { assert_eq!(decode(i(0x100, 2, 6, 1, 0x03)), Inst::Lwu { rd: 1, rs1: 2, imm: 0x100 }); }
+
+    // ---- S-type ----
+    #[test]
+    fn test_sb() { assert_eq!(decode(s(0x108, 3, 2, 0)), Inst::Sb { rs1: 2, rs2: 3, imm: 0x108 }); }
+    #[test]
+    fn test_sh() { assert_eq!(decode(s(0x108, 3, 2, 1)), Inst::Sh { rs1: 2, rs2: 3, imm: 0x108 }); }
+    #[test]
+    fn test_sw() { assert_eq!(decode(s(0x108, 3, 2, 2)), Inst::Sw { rs1: 2, rs2: 3, imm: 0x108 }); }
+    #[test]
+    fn test_sd() { assert_eq!(decode(s(0x108, 3, 2, 3)), Inst::Sd { rs1: 2, rs2: 3, imm: 0x108 }); }
+
+    // ---- System instructions ----
+    #[test]
+    fn test_ecall()  { assert_eq!(decode(0x00000073), Inst::Ecall); }
+    #[test]
+    fn test_ebreak() { assert_eq!(decode(0x00100073), Inst::Ebreak); }
+    #[test]
+    fn test_mret()   { assert_eq!(decode(0x30200073), Inst::Mret); }
+    #[test]
+    fn test_sret()   { assert_eq!(decode(0x10200073), Inst::Sret); }
+    #[test]
+    fn test_wfi()    { assert_eq!(decode(0x10500073), Inst::Fence); }
+    #[test]
+    fn test_fence()  { assert_eq!(decode(0x0FF0000F), Inst::Fence); }
+    #[test]
+    fn test_sfence_vma() { assert_eq!(decode(0x12000073), Inst::Fence); }
+    #[test]
+    fn test_sfence_vma_rs1() { assert_eq!(decode(0x12050073), Inst::Fence); }
+
+    // ---- CSR instructions ----
+    #[test]
+    fn test_csrrw()  { assert_eq!(decode(0x30051073), Inst::Csrrw  { rd: 0, rs1: 10, csr: 0x300 }); }
+    #[test]
+    fn test_csrrs()  { assert_eq!(decode(0x30051073 | (2 << 12)), Inst::Csrrs  { rd: 0, rs1: 10, csr: 0x300 }); }
+    #[test]
+    fn test_csrrc()  { assert_eq!(decode(0x30051073 | (3 << 12)), Inst::Csrrc  { rd: 0, rs1: 10, csr: 0x300 }); }
+    #[test]
+    fn test_csrrwi() { assert_eq!(decode(0x30055073), Inst::Csrrwi { rd: 0, uimm: 10, csr: 0x300 }); }
+    #[test]
+    fn test_csrrsi() { assert_eq!(decode(0x30065073), Inst::Csrrsi { rd: 0, uimm: 10, csr: 0x300 }); }
+    #[test]
+    fn test_csrrci() { assert_eq!(decode(0x30075073), Inst::Csrrci { rd: 0, uimm: 10, csr: 0x300 }); }
+
+    // ---- 32-bit immediate ALU (RV64) ----
+    #[test]
+    fn test_addiw() { assert_eq!(decode(iw(0x100, 2, 0, 1)), Inst::Addiw { rd: 1, rs1: 2, imm: 0x100 }); }
+    #[test]
+    fn test_slliw() {
+        let raw = (5 << 20) | (2 << 15) | (1 << 12) | (1 << 7) | 0x1B;
+        assert_eq!(decode(raw), Inst::Slliw { rd: 1, rs1: 2, shamt: 5 });
+    }
+    #[test]
+    fn test_srliw() {
+        let raw = (5 << 20) | (2 << 15) | (5 << 12) | (1 << 7) | 0x1B;
+        assert_eq!(decode(raw), Inst::Srliw { rd: 1, rs1: 2, shamt: 5 });
+    }
+    #[test]
+    fn test_sraiw() {
+        let raw = (0x20 << 25) | (5 << 20) | (2 << 15) | (5 << 12) | (1 << 7) | 0x1B;
+        assert_eq!(decode(raw), Inst::Sraiw { rd: 1, rs1: 2, shamt: 5 });
+    }
+
+    // ---- 32-bit register ALU (RV64) ----
+    #[test]
+    fn test_addw() { assert_eq!(decode(rw(0x00, 3, 2, 0, 1)), Inst::Addw { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_subw() { assert_eq!(decode(rw(0x20, 3, 2, 0, 1)), Inst::Subw { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_sllw() { assert_eq!(decode(rw(0x00, 3, 2, 1, 1)), Inst::Sllw { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_srlw() { assert_eq!(decode(rw(0x00, 3, 2, 5, 1)), Inst::Srlw { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_sraw() { assert_eq!(decode(rw(0x20, 3, 2, 5, 1)), Inst::Sraw { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_mulw() { assert_eq!(decode(rw(0x01, 3, 2, 0, 1)), Inst::Mulw { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_divw() { assert_eq!(decode(rw(0x01, 3, 2, 4, 1)), Inst::Divw { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_divuw(){ assert_eq!(decode(rw(0x01, 3, 2, 5, 1)), Inst::Divuw{ rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_remw() { assert_eq!(decode(rw(0x01, 3, 2, 6, 1)), Inst::Remw { rd: 1, rs1: 2, rs2: 3 }); }
+    #[test]
+    fn test_remuw(){ assert_eq!(decode(rw(0x01, 3, 2, 7, 1)), Inst::Remuw{ rd: 1, rs1: 2, rs2: 3 }); }
+
+    // ---- Atomic instructions ----
+    fn amos(imm: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32) -> u32 {
+        (imm << 27) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x2F
+    }
+    #[test]
+    fn test_amoaddw()  { assert_eq!(decode(amos(0, 3, 2, 2, 1)), Inst::AmoaddW { rd: 1, rs1: 2, rs2: 3, aq: false, rl: false }); }
+    #[test]
+    fn test_amoswapw() { assert_eq!(decode(amos(1, 3, 2, 2, 1)), Inst::AmoswapW{ rd: 1, rs1: 2, rs2: 3, aq: false, rl: false }); }
+    #[test]
+    fn test_lrw()      { assert_eq!(decode(amos(2, 0, 2, 2, 1)), Inst::LrW { rd: 1, rs1: 2, aq: false, rl: false }); }
+    #[test]
+    fn test_scw()      { assert_eq!(decode(amos(3, 3, 2, 2, 1)), Inst::ScW { rd: 1, rs1: 2, rs2: 3, aq: false, rl: false }); }
+    #[test]
+    fn test_lrd()      { assert_eq!(decode(amos(2, 0, 2, 3, 1)), Inst::LrD { rd: 1, rs1: 2, aq: false, rl: false }); }
+    #[test]
+    fn test_scd()      { assert_eq!(decode(amos(3, 3, 2, 3, 1)), Inst::ScD { rd: 1, rs1: 2, rs2: 3, aq: false, rl: false }); }
+
+    // ---- Illegal instructions ----
+    #[test]
+    fn test_illegal_opcode() { assert_eq!(decode(0xFFFFFFFF), Inst::Illegal(0xFFFFFFFF)); }
+    #[test]
+    fn test_illegal_load_funct3() {
+        let raw = i(0x100, 2, 7, 1, 0x03);
+        assert_eq!(decode(raw), Inst::Illegal(raw));
+    }
+    #[test]
+    fn test_illegal_store_funct3() {
+        let raw = s(0x108, 3, 2, 7);
+        assert_eq!(decode(raw), Inst::Illegal(raw));
+    }
+
+    // ---- Max register numbers ----
+    #[test]
+    fn test_max_regs() {
+        assert_eq!(decode(r(0x00, 31, 31, 0, 31)), Inst::Add { rd: 31, rs1: 31, rs2: 31 });
+    }
+
+    // ---- Immediate sign extension ----
+    #[test]
+    fn test_imm_sign_ext() {
+        let raw = i(0x800, 0, 0, 1, 0x13); // 0x800 is sign-extended to -2048
+        assert_eq!(decode(raw), Inst::Addi { rd: 1, rs1: 0, imm: -2048 });
+    }
+    #[test]
+    fn test_imm_pos() {
+        let raw = i(0x7FF, 0, 0, 1, 0x13); // 0x7FF is sign-extended to 2047
+        assert_eq!(decode(raw), Inst::Addi { rd: 1, rs1: 0, imm: 2047 });
+    }
+}
+
