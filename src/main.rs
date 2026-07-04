@@ -1,5 +1,4 @@
 mod cpu;
-mod debug;
 mod dtb;
 mod mmu;
 mod sbi;
@@ -15,11 +14,12 @@ use std::{
 use crate::mmu::{Mmu, DRAM_BASE, DRAM_END};
 use crate::cpu::{Cpu, StepResult};
 use crate::cpu::csr::{CSR_CYCLE, CSR_INSTRET, CSR_MEPC, CSR_MSTATUS, Privilege};
+use crate::cpu::decoder::decode;
 
 type Bus = Mmu;
 use crate::cpu::csr::{MSTATUS_SPP, MSTATUS_SPIE, MSTATUS_SIE};
-use crate::debug::disasm::disassemble;
 use crate::traps::TrapCause;
+use crate::cpu::decoder::Inst;
 
 const KERNEL_BASE: u64 = 0x8020_0000; // Standard Linux kernel entry
 const DTB_ADDR:    u64 = 0x8600_0000; // inside DRAM
@@ -70,8 +70,8 @@ fn load_elf(bytes: &[u8])->Option<(Vec<u8>, u64)>{
 
 // ===== S-MODE DEMO KERNEL =====
 fn build_smode_demo() -> Vec<u8> {
+    let mut code = Vec::new();
     let msg = b"Hello from S-mode!\n";
-    let mut buf = Vec::new();
     for &ch in msg.iter(){
         let imm = ch as u32;
         let addi_a0 = (imm << 20) | (10 << 7) | 0x13;   // li a0, ch
@@ -91,7 +91,7 @@ fn write_dtb(bus: &mut Bus, addr: u64) -> Result<(), Box<dyn std::error::Error>>
     // Implementation for writing DTB
     let dtb = dtb::generate_dtb();
     let off = (addr - DRAM_BASE) as usize;
-    let dram = & mut bus.dram_mus().data;
+    let dram = & mut bus.dram_mut().data;
     let end = (off + dtb.len()).min(dram.len());
     dram[off..end].copy_from_slice(&dtb[..end-off]);
     Ok(())
@@ -99,7 +99,7 @@ fn write_dtb(bus: &mut Bus, addr: u64) -> Result<(), Box<dyn std::error::Error>>
 
 // ====== Boot kernel in S-mode ======
 fn boot_smode(cpu: &mut Cpu, bus: &mut Bus, entry: u64) -> Result<(), Box<dyn std::error::Error>>{
-    write_dtb(bus, DTB_ADDR);
+    let _ = write_dtb(bus, DTB_ADDR);
 
     cpu.regs[10] = 0;        // a0 = hartid
     cpu.regs[11] = DTB_ADDR; // a1 = DTB address
@@ -114,8 +114,94 @@ fn boot_smode(cpu: &mut Cpu, bus: &mut Bus, entry: u64) -> Result<(), Box<dyn st
 }
 
 
+// ====== Disassembly ======
+fn disassemble(raw: u32) -> String {
+    let inst = decode(raw);
+    fn rn(r: u8) -> &'static str { Cpu::reg_name(r as usize) }
+    match inst {
+        Inst::Lui   { rd, imm }      => format!("lui     {}, 0x{:x}", rn(rd), (imm as u64) >> 12),
+        Inst::Auipc { rd, imm }      => format!("auipc   {}, 0x{:x}", rn(rd), (imm as u64) >> 12),
+        Inst::Jal   { rd, imm }      => format!("jal     {}, {:+}", rn(rd), imm),
+        Inst::Jalr  { rd, rs1, imm } => format!("jalr    {}, {}({})", rn(rd), imm, rn(rs1)),
+        Inst::Beq   { rs1, rs2, imm }  => format!("beq     {}, {}, {:+}", rn(rs1), rn(rs2), imm),
+        Inst::Bne   { rs1, rs2, imm }  => format!("bne     {}, {}, {:+}", rn(rs1), rn(rs2), imm),
+        Inst::Blt   { rs1, rs2, imm }  => format!("blt     {}, {}, {:+}", rn(rs1), rn(rs2), imm),
+        Inst::Bge   { rs1, rs2, imm }  => format!("bge     {}, {}, {:+}", rn(rs1), rn(rs2), imm),
+        Inst::Bltu  { rs1, rs2, imm }  => format!("bltu    {}, {}, {:+}", rn(rs1), rn(rs2), imm),
+        Inst::Bgeu  { rs1, rs2, imm }  => format!("bgeu    {}, {}, {:+}", rn(rs1), rn(rs2), imm),
+        Inst::Lb    { rd, rs1, imm } => format!("lb      {}, {}({})", rn(rd), imm, rn(rs1)),
+        Inst::Lh    { rd, rs1, imm } => format!("lh      {}, {}({})", rn(rd), imm, rn(rs1)),
+        Inst::Lw    { rd, rs1, imm } => format!("lw      {}, {}({})", rn(rd), imm, rn(rs1)),
+        Inst::Ld    { rd, rs1, imm } => format!("ld      {}, {}({})", rn(rd), imm, rn(rs1)),
+        Inst::Lbu   { rd, rs1, imm } => format!("lbu     {}, {}({})", rn(rd), imm, rn(rs1)),
+        Inst::Lhu   { rd, rs1, imm } => format!("lhu     {}, {}({})", rn(rd), imm, rn(rs1)),
+        Inst::Lwu   { rd, rs1, imm } => format!("lwu     {}, {}({})", rn(rd), imm, rn(rs1)),
+        Inst::Sb    { rs1, rs2, imm } => format!("sb      {}, {}({})", rn(rs2), imm, rn(rs1)),
+        Inst::Sh    { rs1, rs2, imm } => format!("sh      {}, {}({})", rn(rs2), imm, rn(rs1)),
+        Inst::Sw    { rs1, rs2, imm } => format!("sw      {}, {}({})", rn(rs2), imm, rn(rs1)),
+        Inst::Sd    { rs1, rs2, imm } => format!("sd      {}, {}({})", rn(rs2), imm, rn(rs1)),
+        Inst::Addi  { rd, rs1, imm } => {
+            if rs1 == 0 { format!("li      {}, {}", rn(rd), imm) }
+            else if imm == 0 { format!("mv      {}, {}", rn(rd), rn(rs1)) }
+            else { format!("addi    {}, {}, {}", rn(rd), rn(rs1), imm) }
+        }
+        Inst::Slti  { rd, rs1, imm } => format!("slti    {}, {}, {}", rn(rd), rn(rs1), imm),
+        Inst::Sltiu { rd, rs1, imm } => format!("sltiu   {}, {}, {}", rn(rd), rn(rs1), imm),
+        Inst::Xori  { rd, rs1, imm } => format!("xori    {}, {}, {}", rn(rd), rn(rs1), imm),
+        Inst::Ori   { rd, rs1, imm } => format!("ori     {}, {}, {}", rn(rd), rn(rs1), imm),
+        Inst::Andi  { rd, rs1, imm } => format!("andi    {}, {}, {}", rn(rd), rn(rs1), imm),
+        Inst::Slli  { rd, rs1, shamt } => format!("slli    {}, {}, {}", rn(rd), rn(rs1), shamt),
+        Inst::Srli  { rd, rs1, shamt } => format!("srli    {}, {}, {}", rn(rd), rn(rs1), shamt),
+        Inst::Srai  { rd, rs1, shamt } => format!("srai    {}, {}, {}", rn(rd), rn(rs1), shamt),
+        Inst::Add   { rd, rs1, rs2 } => format!("add     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Sub   { rd, rs1, rs2 } => format!("sub     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Sll   { rd, rs1, rs2 } => format!("sll     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Slt   { rd, rs1, rs2 } => format!("slt     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Sltu  { rd, rs1, rs2 } => format!("sltu    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Xor   { rd, rs1, rs2 } => format!("xor     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Srl   { rd, rs1, rs2 } => format!("srl     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Sra   { rd, rs1, rs2 } => format!("sra     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Or    { rd, rs1, rs2 } => format!("or      {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::And   { rd, rs1, rs2 } => format!("and     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Addiw { rd, rs1, imm } => format!("addiw   {}, {}, {}", rn(rd), rn(rs1), imm),
+        Inst::Slliw { rd, rs1, shamt } => format!("slliw   {}, {}, {}", rn(rd), rn(rs1), shamt),
+        Inst::Srliw { rd, rs1, shamt } => format!("srliw   {}, {}, {}", rn(rd), rn(rs1), shamt),
+        Inst::Sraiw { rd, rs1, shamt } => format!("sraiw   {}, {}, {}", rn(rd), rn(rs1), shamt),
+        Inst::Addw  { rd, rs1, rs2 } => format!("addw    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Subw  { rd, rs1, rs2 } => format!("subw    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Sllw  { rd, rs1, rs2 } => format!("sllw    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Srlw  { rd, rs1, rs2 } => format!("srlw    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Sraw  { rd, rs1, rs2 } => format!("sraw    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Mul    { rd, rs1, rs2 } => format!("mul     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Mulh   { rd, rs1, rs2 } => format!("mulh    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Mulhsu { rd, rs1, rs2 } => format!("mulhsu  {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Mulhu  { rd, rs1, rs2 } => format!("mulhu   {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Div    { rd, rs1, rs2 } => format!("div     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Divu   { rd, rs1, rs2 } => format!("divu    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Rem    { rd, rs1, rs2 } => format!("rem     {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Remu   { rd, rs1, rs2 } => format!("remu    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Mulw   { rd, rs1, rs2 } => format!("mulw    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Divw   { rd, rs1, rs2 } => format!("divw    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Divuw  { rd, rs1, rs2 } => format!("divuw   {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Remw   { rd, rs1, rs2 } => format!("remw    {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Remuw  { rd, rs1, rs2 } => format!("remuw   {}, {}, {}", rn(rd), rn(rs1), rn(rs2)),
+        Inst::Ecall  => "ecall".into(),
+        Inst::Ebreak => "ebreak".into(),
+        Inst::Fence  => "fence".into(),
+        Inst::Mret   => "mret".into(),
+        Inst::Sret   => "sret".into(),
+        Inst::Csrrw  { rd, rs1, csr }  => format!("csrrw   {}, 0x{:03x}, {}", rn(rd), csr, rn(rs1)),
+        Inst::Csrrs  { rd, rs1, csr }  => format!("csrrs   {}, 0x{:03x}, {}", rn(rd), csr, rn(rs1)),
+        Inst::Csrrc  { rd, rs1, csr }  => format!("csrrc   {}, 0x{:03x}, {}", rn(rd), csr, rn(rs1)),
+        Inst::Csrrwi { rd, uimm, csr } => format!("csrrwi  {}, 0x{:03x}, {}", rn(rd), csr, uimm),
+        Inst::Csrrsi { rd, uimm, csr } => format!("csrrsi  {}, 0x{:03x}, {}", rn(rd), csr, uimm),
+        Inst::Csrrci { rd, uimm, csr } => format!("csrrci  {}, 0x{:03x}, {}", rn(rd), csr, uimm),
+        Inst::Illegal(raw)             => format!("illegal {:#010x}", raw),
+        _                              => format!("{:#010x}", raw),
+    }
+}
+
 // ====== ANSI terminal interface ======
-const CLR: &str = "\x1b[2J\x1b[H";
 const DIM: &str = "\x1b[2m";
 const RST: &str = "\x1b[0m";
 const YLW: &str = "\x1b[33m";
@@ -124,7 +210,6 @@ const RED: &str = "\x1b[31m";
 const CYN: &str = "\x1b[36m";
 
 fn print_state(cpu: &Cpu, bus: &Bus, bps: &HashSet<u64>) {
-    print!("{CLR}");
     println!("{CYN}── registers ────────────────────────────────────────────────────────{RST}");
     for i in 0..32usize {
         let v = cpu.regs[i];
@@ -221,20 +306,45 @@ fn run_until(cpu: &mut Cpu, bus: &mut Bus, bps: &HashSet<u64>, number: Option<u6
 }
 
 // ====== DEBUGGER ======
-fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
-    let mut bps: HashSet<u64> = HashSet::new();
+fn help_msg() {
+    println!("{CYN}commands:{RST}");
+    println!("  {GRN}s{RST}           step one instruction");
+    println!("  {GRN}r [n]{RST}       run n instructions (default 100)");
+    println!("  {GRN}c{RST}           continue until breakpoint or halt");
+    println!("  {GRN}b [addr]{RST}    toggle breakpoint at addr (hex, default PC)");
+    println!("  {GRN}reg [r] [v]{RST} read/write register by name/number; no args = show all");
+    println!("  {GRN}mem addr [n]{RST} dump n×32-bit words (default 8) at addr");
+    println!("  {GRN}mem8/16/32/64 addr{RST}  read 1/2/4/8 bytes");
+    println!("  {GRN}csr addr{RST}    read a CSR (hex address, e.g. 0x300 for mstatus)");
+    println!("  {GRN}reset{RST}       reset CPU to initial state (preserves memory)");
+    println!("  {GRN}h{RST}           this help");
+    println!("  {GRN}q{RST}           quit");
+}
+
+fn print_help() {
     println!("{CYN}RISC-V64 live debugger{RST}");
-    println!("commands: s  step   r <n>  run n steps   c  continue");
-    println!("          b <hex>  toggle breakpoint     q  quit");
+    help_msg();
+}
+
+fn reset_cpu(cpu: &mut Cpu, entry: u64) {
+    *cpu = Cpu::new(entry);
+    println!("  CPU reset to pc={:#010x}", entry);
+}
+
+fn run_debugger(cpu: &mut Cpu, bus: &mut Bus, _initial_entry: u64) {
+    let mut bps: HashSet<u64> = HashSet::new();
+    print_help();
     loop {
         print_state(cpu, bus, &bps);
-        if cpu.halted { println!("{YLW}VM halted.{RST}"); break; }
+        if cpu.halted { println!("{YLW}VM halted. Use 'reset' to restart.{RST}"); break; }
         let cmd = prompt(&bps);
         let mut parts = cmd.splitn(2, ' ');
-        match parts.next().unwrap_or("") {
+        let verb = parts.next().unwrap_or("");
+        let rest = parts.next().unwrap_or("").trim().to_string();
+        match verb {
             "s" | "" => { vm_tick(cpu, bus); }
             "r" => {
-                let n: u64 = parts.next().and_then(|s| s.trim().parse().ok()).unwrap_or(100);
+                let n: u64 = rest.parse().unwrap_or(100);
                 let r = run_until(cpu, bus, &bps, Some(n));
                 if matches!(r, StepResult::Halted) { cpu.halted = true; }
             }
@@ -243,23 +353,97 @@ fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
                 if matches!(r, StepResult::Halted) { cpu.halted = true; }
             }
             "b" => {
-                if let Some(hex) = parts.next() {
-                    let addr = u64::from_str_radix(hex.trim().trim_start_matches("0x"), 16)
-                        .unwrap_or(cpu.pc);
-                    if bps.remove(&addr) {
-                        println!("  breakpoint removed at {addr:#010x}");
-                    } else {
-                        bps.insert(addr);
-                        println!("  breakpoint set at {addr:#010x}");
-                    }
+                let addr = if rest.is_empty() {
+                    cpu.pc
                 } else {
-                    let pc = cpu.pc;
-                    if !bps.remove(&pc) { bps.insert(pc); }
+                    u64::from_str_radix(rest.trim_start_matches("0x"), 16).unwrap_or(cpu.pc)
+                };
+                if bps.remove(&addr) {
+                    println!("  breakpoint removed at {addr:#010x}");
+                } else {
+                    bps.insert(addr);
+                    println!("  breakpoint set at {addr:#010x}");
                 }
             }
+            "reg" => {
+                let mut args = rest.splitn(2, ' ');
+                let rname = args.next().unwrap_or("");
+                if rname.is_empty() {
+                    for i in 0..32usize {
+                        println!("  {:>4}: {:#018x}", Cpu::reg_name(i), cpu.regs[i]);
+                    }
+                } else {
+                    let idx = (0..32).find(|&i| Cpu::reg_name(i) == rname || format!("x{i}") == rname
+                        || (rname.starts_with('x') && rname[1..].parse::<usize>().ok() == Some(i))
+                        || i.to_string() == rname);
+                    match idx {
+                        Some(i) => {
+                            let val_str = args.next().unwrap_or("").trim();
+                            if val_str.is_empty() {
+                                println!("  {} = {:#018x}", Cpu::reg_name(i), cpu.regs[i]);
+                            } else if let Ok(v) = if val_str.starts_with("0x") || val_str.starts_with("0X") {
+                                u64::from_str_radix(&val_str[2..], 16)
+                            } else {
+                                val_str.parse::<u64>()
+                            } {
+                                cpu.regs[i] = v;
+                                println!("  {} := {:#018x}", Cpu::reg_name(i), v);
+                            } else {
+                                println!("{DIM}  bad value{RST}");
+                            }
+                        }
+                        None => println!("{DIM}  unknown register '{rname}'{RST}"),
+                    }
+                }
+            }
+            "mem" => {
+                let mut args = rest.splitn(2, ' ');
+                let addr_str = args.next().unwrap_or("");
+                if addr_str.is_empty() {
+                    println!("{DIM}  usage: mem addr [n]  or mem8/16/32/64 addr{RST}");
+                } else if let Ok(addr) = u64::from_str_radix(addr_str.trim_start_matches("0x"), 16) {
+                    let count: usize = args.next().unwrap_or("8").parse().unwrap_or(8);
+                    for i in 0..count {
+                        let a = addr.wrapping_add((i * 4) as u64);
+                        let v = bus.read32(a).unwrap_or(0);
+                        if i % 4 == 0 { print!("  {a:#010x}: "); }
+                        print!("{v:08x} ");
+                        if i % 4 == 3 { println!(); }
+                    }
+                    if count % 4 != 0 { println!(); }
+                } else {
+                    println!("{DIM}  bad address{RST}");
+                }
+            }
+            "mem8" | "mem16" | "mem32" | "mem64" => {
+                let size = match verb { "mem8" => 1, "mem16" => 2, "mem32" => 4, _ => 8 };
+                if let Ok(addr) = u64::from_str_radix(rest.trim_start_matches("0x"), 16) {
+                    let v = match size {
+                        1 => bus.read8(addr).unwrap_or(0) as u64,
+                        2 => bus.read16(addr).unwrap_or(0) as u64,
+                        4 => bus.read32(addr).unwrap_or(0) as u64,
+                        _ => bus.read64(addr).unwrap_or(0),
+                    };
+                    println!("  [{:#010x}]: {:#0width$x}", addr, v, width = 2 + size * 2);
+                } else {
+                    println!("{DIM}  bad address{RST}");
+                }
+            }
+            "csr" => {
+                if let Ok(addr) = u64::from_str_radix(rest.trim_start_matches("0x"), 16) {
+                    let v = cpu.csr.read(addr as usize, Privilege::M);
+                    println!("  CSR[{:#06x}] = {:#018x}", addr, v);
+                } else {
+                    println!("{DIM}  usage: csr <hex-addr>{RST}");
+                }
+            }
+            "reset" => {
+                reset_cpu(cpu, cpu.pc);
+            }
+            "h" | "help" => help_msg(),
             "q" | "quit" => break,
             other if !other.is_empty() =>
-                println!("{DIM}  unknown command '{other}'. try: s r c b q{RST}"),
+                println!("{DIM}  unknown '{other}'. try h for help{RST}"),
             _ => {}
         }
     }
@@ -267,7 +451,7 @@ fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
 
 // ==== Headless run  ====
 fn drain_uart(bus: &mut Bus) {
-    let out = bus.uart.flush_output();
+    let out = bus.uart.flush();
     if !out.is_empty() {
         print!("{out}");
     }
@@ -305,16 +489,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = args.iter().skip(1).find(|a| !a.starts_with('-'));
 
     if smode {
-        let mut is_elf = false;
         let (bin, entry) = match path {
             Some(p) => {
                 let bytes = fs::read(p).unwrap_or_else(|e| { eprintln!("error: {e}"); std::process::exit(1); });
-                if bytes.starts_with(&[0x7f, b'E', b'L', b'F']) {
-                    is_elf = true;
-                    load_file(&bytes)
-                } else {
-                    (Mmu::new_at(bytes, KERNEL_BASE), KERNEL_BASE)
-                }
+                load_file(&bytes)
             }
             None => {
                 println!("no kernel supplied — running built-in S-mode demo");
@@ -323,16 +501,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let mut bus = bin;
         let mut cpu = Cpu::new(entry);
-        if is_elf {
-            write_dtb(&mut bus, DTB_ADDR);
-            cpu.regs[10] = 0;
-            cpu.regs[11] = DTB_ADDR;
-        } else {
-            boot_smode(&mut cpu, &mut bus, entry);
-        }
-        if debug { run_debugger(&mut cpu, &mut bus); }
+        let _ = boot_smode(&mut cpu, &mut bus, entry);
+        if debug { run_debugger(&mut cpu, &mut bus, entry); }
         else     { run_headless(&mut cpu, &mut bus); }
-        return;
+        return Ok(());
     }
 
     const DEMO: &[u32] = &[
@@ -353,6 +525,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut cpu = Cpu::new(entry);
-    if debug { run_debugger(&mut cpu, &mut bus); }
+    if debug { run_debugger(&mut cpu, &mut bus, entry); }
     else     { run_headless(&mut cpu, &mut bus); }
+    Ok(())
 }

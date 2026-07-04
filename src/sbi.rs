@@ -65,7 +65,7 @@ SbiResult {
             SbiResult::ok()
         }
         SBI_CONSOLE_PUTCHAR => {
-            let _ = bus.write8(uart::UART_BASE, a0 as u8);
+            let _ = bus.write8(uart::UART_BASE as u64, a0 as u8);
             SbiResult::ok()
         }
         SBI_CONSOLE_GETCHAR | SBI_CLEAR_IPI | 
@@ -95,7 +95,7 @@ fn handle_sbi_dbcn(func_id: u64, buf_addr: u64, buf_len: u64, _out_len_addr: u64
 bus: &mut Mmu) -> SbiResult {
     match func_id {
         SBI_DBCN_CONSOLE_WRITE_BYTE => {
-            let _ = bus.write8(uart::UART_BASE, buf_addr as u8);
+            let _ = bus.write8(uart::UART_BASE as u64, buf_addr as u8);
             SbiResult::ok()
         }
         SBI_DBCN_CONSOLE_WRITE => {
@@ -103,7 +103,7 @@ bus: &mut Mmu) -> SbiResult {
             for i in 0..buf_len {
                 let addr = buf_addr.wrapping_add(i);
                 if let Ok(byte) = bus.read8(addr) {
-                    let _ = bus.write8(uart::UART_BASE, byte);
+                    let _ = bus.write8(uart::UART_BASE as u64, byte);
                     written = i + 1;
                 } else {
                     break;

@@ -104,7 +104,7 @@ pub fn pending_interrupt(
         Privilege::M => unreachable!(),
     };
     if s_enabled {
-        if let Some(&(bit, cause, _)) = s_irqs
+        if let Some(&(_bit, cause, _)) = s_irqs
             .iter()
             .find(|&&(bit, _, _) | pending & bit != 0 && (mideleg & bit) != 0) {
                 return Some((cause, true));

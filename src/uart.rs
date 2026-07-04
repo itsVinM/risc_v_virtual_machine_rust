@@ -1,20 +1,19 @@
 use crate::traps::TrapCause;
 
-pub const UART_BASE: usize = 0x1000_0000;
-pub const UART_END:  usize = 0x1000_1000;
+pub const UART_BASE: u64 = 0x1000_0000;
+pub const UART_END:  u64 = 0x1000_0FFF;
 
 // 8250 UART register offsets (DLAB=0)
 const THR: u64 = 0; // TX (write)
 const IER: u64 = 1; // Interrupt Enable
-// DLAB=1: DLL at 0, DLM at 1
 const FCR: u64 = 2; // FIFO Control (write)
 const LCR: u64 = 3; // Line Control
 const MCR: u64 = 4; // Modem Control
 const LSR: u64 = 5; // Line Status
 const MSR: u64 = 6; // Modem Status
 
-const UART_LSR_TX_EMPTY: u64 = 1 << 5; 
-const UART_LSR_TX_EMPTY_ALL: u64 = 1 << 6; 
+const UART_LSR_TX_EMPTY: u8 = 1 << 5;
+const UART_LSR_TX_EMPTY_ALL: u8 = 1 << 6;
 
 pub struct Uart {
     out_buf: [u8; 4096],
@@ -22,8 +21,6 @@ pub struct Uart {
     ier: u8,
     lcr: u8,
     mcr: u8,
-    dll: u8,
-    dlm: u8,
 }
 
 impl Uart {
@@ -34,12 +31,10 @@ impl Uart {
             ier: 0,
             lcr: 0,
             mcr: 0,
-            dll: 0,
-            dlm: 0,
         }
     }
 
-    pub fn read8(&self, offset: usize) -> Result<u8, TrapCause> {
+    pub fn read8(&self, offset: u64) -> Result<u8, TrapCause> {
         match offset {
             THR => self.thr_read(),
             IER => Ok(self.ier),
@@ -58,7 +53,7 @@ impl Uart {
         self.out_len = 0;
         s
     }
-    pub fn write8(&mut self, offset: usize, value: u8) -> Result<(), TrapCause> {
+    pub fn write8(&mut self, offset: u64, value: u8) -> Result<(), TrapCause> {
         match offset {
             THR => self.thr_write(value),
             IER => self.ier_write(value),
@@ -70,15 +65,8 @@ impl Uart {
     }
 
     fn thr_read(&self) -> Result<u8, TrapCause> {
-        if self.out_len ==  0 {
-            Ok(0)
-        } 
-        assert!(self.out_len > 0);
-        let val = self.out_buf[0];
-        self.out_buf.rotate_left(1);
-        self.out_len -= 1;
-        Ok(val) 
-        
+        // Output-only UART — no data to read back
+        Ok(0)
     }
 
     fn thr_write(&mut self, value: u8) -> Result<(), TrapCause> {
