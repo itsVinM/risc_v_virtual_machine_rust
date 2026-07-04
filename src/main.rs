@@ -7,7 +7,11 @@ mod traps;
 mod uart;
 mod virtio;
 
-use std::{env, fs, io::{self, BufRead, Write}};
+use std::{
+    collections::HashSet,
+    env, fs,
+    io::{self, BufRead, Write},
+};
 use crate::mmu::{Mmu, DRAM_BASE, DRAM_END};
 use crate::cpu::{Cpu, StepResult};
 use crate::cpu::csr::{CSR_CYCLE, CSR_INSTRET, CSR_MEPC, CSR_MSTATUS, Privilege};
@@ -20,99 +24,97 @@ use crate::traps::TrapCause;
 const KERNEL_BASE: u64 = 0x8020_0000; // Standard Linux kernel entry
 const DTB_ADDR:    u64 = 0x8600_0000; // inside DRAM
 
-fn load_file(bytes: &[u8]) -> (Bus, u64) {
-    if let Some((flat, entry)) = load_elf(bytes) {
+// RISC-V ecall/SBI convetions
+const SYS_EXIT: u64 = 93; //Linux syscall number for exit
+const SBI_SHUTDOWN: u64 = 8; // SBI call for shutdown
+
+// ===== Binary loading =====
+fn load_file(bytes: &[u8]) -> (Bus, u64){
+    if let Some((flat, entry)) = load_elf(bytes){
         (Mmu::from_dram(flat), entry)
-    } else {
-        (Mmu::new(bytes), DRAM_BASE)
-    }
+    } else {(Mmu::new(bytes), DRAM_BASE)}   
 }
 
-fn load_elf(b: &[u8]) -> Option<(Vec<u8>, u64)> {
-    if b.len() < 64 || b.get(0..4)? != &[0x7f, b'E', b'L', b'F'] { return None; }
-    if *b.get(4)? != 2 { return None; }
-    let entry   = u64::from_le_bytes(b.get(24..32)?.try_into().ok()?);
-    let phoff   = u64::from_le_bytes(b.get(32..40)?.try_into().ok()?) as usize;
-    let phentsz = u16::from_le_bytes(b.get(54..56)?.try_into().ok()?) as usize;
-    let phnum   = u16::from_le_bytes(b.get(56..58)?.try_into().ok()?) as usize;
+/// Parse a 64-bit little-endian RISC-V ELF and flatten its loadable
+/// segments into a DRAM-sized buffer
+fn load_elf(bytes: &[u8])->Option<(Vec<u8>, u64)>{
+    if bytes.len() < 64 || bytes.get(0..4)? != &[0x7f, b'E', b'L', b'F'] { return None; }
+    if *bytes.get(4)? != 2 { return None; } // 64-bit
+    if *bytes.get(5)? != 1 { return None; } // little-endian
+    if *bytes.get(6)? != 1 { return None; } // RISCV
+    let machine = u16::from_le_bytes(bytes.get(18..20)?.try_into().ok()?);
+    if machine != 0xF3 { return None; } // RISCV
+    
+    let entry = u64::from_le_bytes(bytes.get(24..32)?.try_into().ok()?);
+    let phoff = u64::from_le_bytes(bytes.get(32..40)?.try_into().ok()?) as usize;
+    let phentsize = u16::from_le_bytes(bytes.get(54..56)?.try_into().ok()?) as usize;
+    let phnum = u16::from_le_bytes(bytes.get(56..58)?.try_into().ok()?) as usize;
     let dram_size = (DRAM_END - DRAM_BASE) as usize;
     let mut flat = vec![0u8; dram_size];
-    for i in 0..phnum {
-        let ph = phoff + i * phentsz;
-        let ptype  = u32::from_le_bytes(b.get(ph..ph+4)?.try_into().ok()?);
-        if ptype != 1 { continue; }
-        let foff   = u64::from_le_bytes(b.get(ph+8..ph+16)?.try_into().ok()?) as usize;
-        let paddr  = u64::from_le_bytes(b.get(ph+24..ph+32)?.try_into().ok()?);
-        let filesz = u64::from_le_bytes(b.get(ph+32..ph+40)?.try_into().ok()?) as usize;
-        if !(DRAM_BASE..DRAM_END).contains(&paddr) { continue; }
-        let off = (paddr - DRAM_BASE) as usize;
-        if off + filesz > dram_size { continue; }
-        flat[off..off+filesz].copy_from_slice(b.get(foff..foff+filesz)?);
+
+
+    for idx in 0..phnum{
+        let off = phoff + idx * phentsize;
+        let p_type = u32::from_le_bytes(bytes.get(off..off+4)?.try_into().ok()?);
+        if p_type != 1 { continue; } // PT_LOAD
+        let p_offset = u64::from_le_bytes(bytes.get(off+8..off+16)?.try_into().ok()?) as usize;
+        let p_vaddr = u64::from_le_bytes(bytes.get(off+16..off+24)?.try_into().ok()?) as usize;
+        let p_filesz = u64::from_le_bytes(bytes.get(off+32..off+40)?.try_into().ok()?) as usize;
+        let p_memsz = u64::from_le_bytes(bytes.get(off+40..off+48)?.try_into().ok()?) as usize;
+        if p_vaddr < DRAM_BASE as usize || p_vaddr + p_memsz > DRAM_END as usize { return None; }
+        flat[p_vaddr - DRAM_BASE as usize .. p_vaddr - DRAM_BASE as usize + p_filesz]
+            .copy_from_slice(&bytes[p_offset .. p_offset + p_filesz]);
     }
     Some((flat, entry))
 }
 
-// ── Built-in S-mode demo kernel ──────────────────────────────────────────
-// A small S-mode program that prints via SBI and exits.
+// ===== S-MODE DEMO KERNEL =====
 fn build_smode_demo() -> Vec<u8> {
     let msg = b"Hello from S-mode!\n";
-    let mut code = Vec::new();
-    // Print loop: load byte from msg, break on null, SBI putchar, repeat
-    // We'll encode instructions manually
-    for &ch in msg.iter() {
-        // li a0, ch  -> addi a0, zero, ch
+    let mut buf = Vec::new();
+    for &ch in msg.iter(){
         let imm = ch as u32;
-        let addi_a0 = (imm << 20) | (10 << 7) | 0x13;
+        let addi_a0 = (imm << 20) | (10 << 7) | 0x13;   // li a0, ch
         code.extend_from_slice(&addi_a0.to_le_bytes());
-        // li a7, 1   -> addi a7, zero, 1
-        let li_a7: u32 = (1 << 20) | (17 << 7) | 0x13;
+        let li_a7: u32 = (1 << 20) | (17 << 7) | 0x13;  // li a7, 1 (SBI putchar)
         code.extend_from_slice(&li_a7.to_le_bytes());
-        // ecall
-        code.extend_from_slice(&0x00000073u32.to_le_bytes());
+        code.extend_from_slice(&0x00000073u32.to_le_bytes()); // ecall
     }
-    // Shutdown: li a7, 8; ecall
-    let li_a7_8: u32 = (8 << 20) | (17 << 7) | 0x13;
+    let li_a7_8: u32 = (SBI_SHUTDOWN as u32) << 20 | (17 << 7) | 0x13; // li a7, 8
     code.extend_from_slice(&li_a7_8.to_le_bytes());
-    code.extend_from_slice(&0x00000073u32.to_le_bytes());
+    code.extend_from_slice(&0x00000073u32.to_le_bytes()); // ecall
     code
 }
 
-// ── Boot a kernel in S-mode ──────────────────────────────────────────────
-fn boot_smode(cpu: &mut Cpu, bus: &mut Bus, entry: u64) {
-    // Generate DTB and place it in memory
+// ===== DTB placement =====
+fn write_dtb(bus: &mut Bus, addr: u64) -> Result<(), Box<dyn std::error::Error>>{
+    // Implementation for writing DTB
     let dtb = dtb::generate_dtb();
-    let dtb_offset = (DTB_ADDR - DRAM_BASE) as usize;
-    let dram = &mut bus.dram_mut().data;
-    let end = (dtb_offset + dtb.len()).min(dram.len());
-    dram[dtb_offset..end].copy_from_slice(&dtb[..end - dtb_offset]);
-
-    // Set up registers for S-mode boot (RISC-V boot convention)
-    cpu.regs[10] = 0; // a0 = hartid
-    cpu.regs[11] = DTB_ADDR; // a1 = DTB address
-
-    // Transition from M-mode to S-mode at the kernel entry
-    let ms = cpu.csr.mstatus();
-    let new_ms = (ms & !(MSTATUS_SPP | MSTATUS_SPIE | MSTATUS_SIE))
-               | (0 << 8);  // SPP = 0 (U-mode was previous, kernel runs in S-mode)
-                         // Actually SPP should be 0 since we're entering S-mode from M-mode
-                         // MPP in mret will be set to 0 (U-mode), then mret switches to S-mode
-    cpu.csr.write(CSR_MSTATUS, new_ms, Privilege::M);
-    cpu.csr.write(CSR_MEPC, entry, Privilege::M);
-
-    // Set MPP = 1 (S-mode) so mret enters S-mode
-    let mut ms = cpu.csr.mstatus();
-    ms = (ms & !(3 << 11)) | (1 << 11); // MPP = S-mode (1)
-    ms |= 1 << 7; // MPIE = 1
-    cpu.csr.write(CSR_MSTATUS, ms, Privilege::M);
-
-    cpu.priv_level = Privilege::S; // We'll do mret, but we're jumping directly
-    // Actually let's just set the privilege and jump
-    cpu.priv_level = Privilege::S;
-    cpu.pc = entry;
-    // The executor's Mret instruction will be used by the kernel's first sret
+    let off = (addr - DRAM_BASE) as usize;
+    let dram = & mut bus.dram_mus().data;
+    let end = (off + dtb.len()).min(dram.len());
+    dram[off..end].copy_from_slice(&dtb[..end-off]);
+    Ok(())
 }
 
-// ── ANSI helpers ─────────────────────────────────────────────────────────
+// ====== Boot kernel in S-mode ======
+fn boot_smode(cpu: &mut Cpu, bus: &mut Bus, entry: u64) -> Result<(), Box<dyn std::error::Error>>{
+    write_dtb(bus, DTB_ADDR);
+
+    cpu.regs[10] = 0;        // a0 = hartid
+    cpu.regs[11] = DTB_ADDR; // a1 = DTB address
+
+    let ms = cpu.csr.mstatus() & !(MSTATUS_SPP | MSTATUS_SPIE | MSTATUS_SIE);
+    cpu.csr.write(CSR_MSTATUS, ms, Privilege::M);
+    cpu.csr.write(CSR_MEPC, entry, Privilege::M); 
+
+    cpu.priv_level = Privilege::S;
+    cpu.pc = entry;
+    Ok(())
+}
+
+
+// ====== ANSI terminal interface ======
 const CLR: &str = "\x1b[2J\x1b[H";
 const DIM: &str = "\x1b[2m";
 const RST: &str = "\x1b[0m";
@@ -121,7 +123,7 @@ const GRN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
 const CYN: &str = "\x1b[36m";
 
-fn print_state(cpu: &Cpu, bus: &Bus, bps: &[u64]) {
+fn print_state(cpu: &Cpu, bus: &Bus, bps: &HashSet<u64>) {
     print!("{CLR}");
     println!("{CYN}── registers ────────────────────────────────────────────────────────{RST}");
     for i in 0..32usize {
@@ -151,12 +153,14 @@ fn print_state(cpu: &Cpu, bus: &Bus, bps: &[u64]) {
     println!("  halted={:<5}  mode={:?}  breakpoints={}  cycle={}  instret={}",
         cpu.halted, cpu.priv_level, bps.len(), cycle, instret);
     if !bps.is_empty() {
-        let bp_list: Vec<String> = bps.iter().map(|a| format!("{a:#010x}")).collect();
+        let mut sorted: Vec<u64> = bps.iter().copied().collect();
+        sorted.sort_unstable();
+        let bp_list: Vec<String> = sorted.iter().map(|a| format!("{a:#010x}")).collect();
         println!("  breakpoints: {}", bp_list.join("  "));
     }
 }
 
-fn prompt(bps: &[u64]) -> String {
+fn prompt(bps: &HashSet<u64>) -> String {
     let marker = if bps.is_empty() { "" } else { " [bp]" };
     print!("\n{YLW}dbg{marker}>{RST} ");
     io::stdout().flush().ok();
@@ -165,10 +169,10 @@ fn prompt(bps: &[u64]) -> String {
     line.trim().to_string()
 }
 
-// ── VM tick ──────────────────────────────────────────────────────────────
-fn vm_tick(cpu: &mut Cpu, bus: &mut Bus) -> StepResult {
+// ====== VM TICK ====
+fn vm_tick(cpu: &mut Cpu, bus: &mut Bus)-> StepResult{
     if bus.clint.timer_pending() { cpu.csr.set_mip_timer(); }
-    else                         { cpu.csr.clear_mip_timer(); }
+    else { cpu.csr.clear_mip_timer(); }
     // SSTC: time >= stimecmp → raise supervisor timer interrupt
     if cpu.csr.sstc_enabled() && bus.clint.mtime >= cpu.csr.stimecmp() {
         cpu.csr.set_mip_stimer();
@@ -177,17 +181,17 @@ fn vm_tick(cpu: &mut Cpu, bus: &mut Bus) -> StepResult {
     }
     // PLIC: S-mode external interrupt
     if bus.has_pending_plic_s() { cpu.csr.set_mip_seip(); }
-    else                        { cpu.csr.clear_mip_seip(); }
+    else { cpu.csr.clear_mip_seip(); }
     // CLINT: software interrupt → mip.SSIP
     if bus.clint.softint_pending() { cpu.csr.set_mip_ssip(); }
-    else                           { cpu.csr.clear_mip_ssip(); }
+    else { cpu.csr.clear_mip_ssip(); }
 
-    let r = cpu.step(bus);
+    let result_step = cpu.step(bus);
 
-    // Handle ecalls: SBI for S-mode, SYS_exit for M-mode
-    match r {
+    // Handle ecalls ->> SBI for S-mode, SYS_exit for M-mode
+    match result_step {
         StepResult::Trap(TrapCause::EcallFromM) => {
-            if cpu.regs[17] == 93 { return StepResult::Halted; }
+            if cpu.regs[17] == SYS_EXIT { return StepResult::Halted; }
             cpu.pc = cpu.pc.wrapping_add(4);
         }
         StepResult::Trap(TrapCause::EcallFromS) => {
@@ -203,11 +207,11 @@ fn vm_tick(cpu: &mut Cpu, bus: &mut Bus) -> StepResult {
         }
         _ => {}
     }
-    r
+    result_step
 }
 
-fn run_until(cpu: &mut Cpu, bus: &mut Bus, bps: &[u64], n: Option<u64>) -> StepResult {
-    let max = n.unwrap_or(u64::MAX);
+fn run_until(cpu: &mut Cpu, bus: &mut Bus, bps: &HashSet<u64>, number: Option<u64>) -> StepResult {
+    let max = number.unwrap_or(u64::MAX);
     for _ in 0..max {
         let r = vm_tick(cpu, bus);
         if !matches!(r, StepResult::Ok) { return r; }
@@ -216,9 +220,9 @@ fn run_until(cpu: &mut Cpu, bus: &mut Bus, bps: &[u64], n: Option<u64>) -> StepR
     StepResult::Ok
 }
 
-// ── Debugger ─────────────────────────────────────────────────────────────
+// ====== DEBUGGER ======
 fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
-    let mut bps: Vec<u64> = Vec::new();
+    let mut bps: HashSet<u64> = HashSet::new();
     println!("{CYN}RISC-V64 live debugger{RST}");
     println!("commands: s  step   r <n>  run n steps   c  continue");
     println!("          b <hex>  toggle breakpoint     q  quit");
@@ -242,17 +246,15 @@ fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
                 if let Some(hex) = parts.next() {
                     let addr = u64::from_str_radix(hex.trim().trim_start_matches("0x"), 16)
                         .unwrap_or(cpu.pc);
-                    if let Some(pos) = bps.iter().position(|&a| a == addr) {
-                        bps.remove(pos);
+                    if bps.remove(&addr) {
                         println!("  breakpoint removed at {addr:#010x}");
                     } else {
-                        bps.push(addr);
+                        bps.insert(addr);
                         println!("  breakpoint set at {addr:#010x}");
                     }
                 } else {
                     let pc = cpu.pc;
-                    if let Some(pos) = bps.iter().position(|&a| a == pc) { bps.remove(pos); }
-                    else { bps.push(pc); }
+                    if !bps.remove(&pc) { bps.insert(pc); }
                 }
             }
             "q" | "quit" => break,
@@ -263,37 +265,44 @@ fn run_debugger(cpu: &mut Cpu, bus: &mut Bus) {
     }
 }
 
-// ── Headless run ─────────────────────────────────────────────────────────
+// ==== Headless run  ====
+fn drain_uart(bus: &mut Bus) {
+    let out = bus.uart.flush_output();
+    if !out.is_empty() {
+        print!("{out}");
+    }
+}
+
 fn run_headless(cpu: &mut Cpu, bus: &mut Bus) {
     loop {
         match vm_tick(cpu, bus) {
             StepResult::Halted => {
-                let out = bus.uart.flush_output();
-                if !out.is_empty() { print!("{out}"); let _ = io::stdout().flush(); }
+                drain_uart(bus);
+                let _ = io::stdout().flush();
                 println!("halted  pc={:#010x}  a0={}  cycles={}",
                     cpu.pc, cpu.regs[10] as i64, cpu.csr.read(CSR_CYCLE, Privilege::M));
                 break;
             }
             StepResult::Trap(t) if !matches!(t, TrapCause::EcallFromM | TrapCause::EcallFromS) => {
-                let out = bus.uart.flush_output();
-                if !out.is_empty() { print!("{out}"); let _ = io::stdout().flush(); }
+                drain_uart(bus);
+                let _ = io::stdout().flush();
                 eprintln!("trap {:?}  pc={:#010x}", t, cpu.pc);
                 break;
             }
             _ => {
-                let out = bus.uart.flush_output();
-                if !out.is_empty() { print!("{out}"); let _ = io::stdout().flush(); }
+                drain_uart(bus);
             }
         }
     }
+    let _ = io::stdout().flush();
 }
 
-// ── Entry point ──────────────────────────────────────────────────────────
-fn main() {
+// ====== MAIN ======
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let debug = args.contains(&"--debug".to_string()) || args.contains(&"-d".to_string());
     let smode = args.contains(&"--sbi".to_string()) || args.contains(&"-s".to_string());
-    let path  = args.iter().find(|a| !a.starts_with('-') && *a != &args[0]);
+    let path = args.iter().skip(1).find(|a| !a.starts_with('-'));
 
     if smode {
         let mut is_elf = false;
@@ -315,11 +324,7 @@ fn main() {
         let mut bus = bin;
         let mut cpu = Cpu::new(entry);
         if is_elf {
-            let dtb = dtb::generate_dtb();
-            let dram = &mut bus.dram_mut().data;
-            let off = (DTB_ADDR - DRAM_BASE) as usize;
-            let end = (off + dtb.len()).min(dram.len());
-            dram[off..end].copy_from_slice(&dtb[..end - off]);
+            write_dtb(&mut bus, DTB_ADDR);
             cpu.regs[10] = 0;
             cpu.regs[11] = DTB_ADDR;
         } else {
