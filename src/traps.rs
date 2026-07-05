@@ -8,7 +8,6 @@ use crate::cpu::csr::{
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum TrapCause {
     InstructionAddressMisaligned,
     InstructionAccessFault,
@@ -32,12 +31,12 @@ pub enum TrapCause {
 impl TrapCause {
     pub fn code(self) -> u64 {
         match self {
-            Self::InstructionAddressMisaligned => 0,
-            Self::InstructionAccessFault       => 1,
-            Self::IllegalInstruction(_)        => 2,
-            Self::Breakpoint                   => 3,
-            Self::LoadAddressMisaligned        => 4,
-            Self::LoadAccessFault              => 5,
+            Self::InstructionAddressMisaligned  => 0,
+            Self::InstructionAccessFault        => 1,
+            Self::IllegalInstruction(_)         => 2,
+            Self::Breakpoint                    => 3,
+            Self::LoadAddressMisaligned         => 4,
+            Self::LoadAccessFault               => 5,
             Self::StoreAddressMisaligned       => 6,
             Self::StoreAccessFault             => 7,
             Self::EcallFromU                   => 8,
@@ -69,46 +68,46 @@ pub fn pending_interrupt(
     mideleg: u64,
 ) -> Option<(TrapCause, bool)> {
     let pending = mie & mip;
-    let m_irqs = [
-        (MIP_MEIP, TrapCause::ExternalInterrupt, true),
-        (MIP_MTIP, TrapCause::TimerInterrupt, true),
-        (MIP_MSIP, TrapCause::SoftwareInterrupt, true),
-    ];
-    let s_irqs = [
-        (MIP_SEIP, TrapCause::ExternalInterrupt, false),
-        (MIP_STIP, TrapCause::TimerInterrupt, false),
-        (MIP_SSIP, TrapCause::SoftwareInterrupt, false),
-    ];
 
     // Check M-mode interrupts
     let m_enabled = match priv_level {
         Privilege::M => (mstatus & MSTATUS_MIE) != 0,
-        Privilege::S | Privilege::U => true, // M-mode interrupts always enabled for S/U
+        Privilege::S | Privilege::U => true,
     };
+
     if m_enabled {
-        if let Some(&(_, cause, delegated)) = m_irqs
-            .iter()
-            .find(|&&(mask, _, _)| (pending & mask) != 0)
+        for &(mask, cause, delegated) in &
+            [ (MIP_MEIP, TrapCause::ExternalInterrupt, true),
+              (MIP_MTIP, TrapCause::TimerInterrupt, true),
+              (MIP_MSIP, TrapCause::SoftwareInterrupt, true), ] as &[(u64, TrapCause, bool); 3]
         {
-            return Some((cause, delegated));
+            if pending & mask != 0 {
+                return Some((cause, delegated));
+            }
         }
     }
 
-    // For M-mode, no further checks
-    if priv_level == Privilege::M {return None;}
+    if priv_level == Privilege::M {
+        return None;
+    }
 
     // Check S-mode interrupts
     let s_enabled = match priv_level {
         Privilege::S => (mstatus & MSTATUS_SIE) != 0,
-        Privilege::U => true, // S-mode interrupts always enabled for U
+        Privilege::U => true,
         Privilege::M => unreachable!(),
     };
+
     if s_enabled {
-        if let Some(&(_bit, cause, _)) = s_irqs
-            .iter()
-            .find(|&&(bit, _, _) | pending & bit != 0 && (mideleg & bit) != 0) {
+        for &(bit, cause, _) in &
+            [ (MIP_SEIP, TrapCause::ExternalInterrupt, false),
+              (MIP_STIP, TrapCause::TimerInterrupt, false),
+              (MIP_SSIP, TrapCause::SoftwareInterrupt, false), ] as &[(u64, TrapCause, bool); 3]
+        {
+            if pending & bit != 0 && (mideleg & bit) != 0 {
                 return Some((cause, true));
             }
+        }
     }
 
     None

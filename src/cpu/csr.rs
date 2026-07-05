@@ -69,7 +69,7 @@ impl CsrFile {
     pub fn read(&self, addr: usize, priv_level: Privilege) -> u64 {
         if addr >= NUM_CSRS { return 0; }
         match addr {
-            CSR_SSTATUS => self.regs[CSR_MSTATUS] & 0x8000_0000_0000_0033,
+            CSR_SSTATUS => self.regs[CSR_MSTATUS] & (MSTATUS_SPP | MSTATUS_SPIE | MSTATUS_SIE | MSTATUS_FS | MSTATUS_XS | MSTATUS_VS | MSTATUS_SUM | MSTATUS_MXR),
             CSR_SIE     => self.regs[CSR_MIE] & self.regs[CSR_MIDELEG],
             CSR_SIP     => self.regs[CSR_MIP] & self.regs[CSR_MIDELEG],
             CSR_SATP if priv_level == Privilege::S => self.regs[CSR_SATP],
@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn test_read_counter_in_any_mode() {
         let mut csr = CsrFile::new();
-        csr.write(CSR_CYCLE, 42, Privilege::M);
+        for _ in 0..42 { csr.inc_cycle(); }
         assert_eq!(csr.read(CSR_CYCLE, Privilege::S), 42);
         assert_eq!(csr.read(CSR_CYCLE, Privilege::U), 42);
     }

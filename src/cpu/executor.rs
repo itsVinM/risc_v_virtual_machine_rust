@@ -709,7 +709,7 @@ mod tests {
     }
     #[test]
     fn test_csrrs_exec() {
-        let mut regs = r([0; 32]); regs[10] = 0x8; // MSTATUS.MPIE=1
+        let mut regs = r([0; 32]); regs[10] = 0x80; // MSTATUS.MPIE=1
         let mut csr = CsrFile::new();
         run(Inst::Csrrs { rd: 1, rs1: 10, csr: 0x300 }, &mut regs, &mut csr);
         assert_eq!(regs[1], 0); // old mstatus had no MIE
@@ -744,7 +744,8 @@ mod tests {
     fn test_sret_requires_s_mode() {
         let mut regs = r([0; 32]);
         let mut csr = CsrFile::new();
-        let res = run(Inst::Sret, &mut regs, &mut csr);
+        let mut bus = Mmu::new(&[]);
+        let res = execute(Inst::Sret, 0x1000, &mut regs, &mut csr, &mut bus, Privilege::U);
         assert_eq!(res.trap, Some(TrapCause::IllegalInstruction(0x10200073)));
     }
     #[test]

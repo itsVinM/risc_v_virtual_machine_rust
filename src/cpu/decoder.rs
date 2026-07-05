@@ -349,7 +349,7 @@ mod tests {
 
     // ---- RV64I I-type (ALU immediate) ----
     #[test]
-    fn test_addi() { assert_eq!(decode(i(0x7FF, 2, 0, 1, 0x13)), Inst::Addi { rd: 1, rs1: 2, imm: -1 }); }
+    fn test_addi() { assert_eq!(decode(i(0xFFF, 2, 0, 1, 0x13)), Inst::Addi { rd: 1, rs1: 2, imm: -1 }); }
     #[test]
     fn test_addi_zero() { assert_eq!(decode(i(0, 0, 0, 0, 0x13)), Inst::Addi { rd: 0, rs1: 0, imm: 0 }); }
     #[test]
@@ -397,7 +397,7 @@ mod tests {
     }
     #[test]
     fn test_jal_neg() {
-        assert_eq!(decode(j(0xFFFFF, 1)), Inst::Jal { rd: 1, imm: -1 });
+        assert_eq!(decode(j(0x1FFFFE, 1)), Inst::Jal { rd: 1, imm: -2 });
     }
 
     // ---- I-type (JALR) ----
@@ -468,15 +468,15 @@ mod tests {
     #[test]
     fn test_csrrw()  { assert_eq!(decode(0x30051073), Inst::Csrrw  { rd: 0, rs1: 10, csr: 0x300 }); }
     #[test]
-    fn test_csrrs()  { assert_eq!(decode(0x30051073 | (2 << 12)), Inst::Csrrs  { rd: 0, rs1: 10, csr: 0x300 }); }
+    fn test_csrrs()  { assert_eq!(decode(0x30052073), Inst::Csrrs  { rd: 0, rs1: 10, csr: 0x300 }); }
     #[test]
-    fn test_csrrc()  { assert_eq!(decode(0x30051073 | (3 << 12)), Inst::Csrrc  { rd: 0, rs1: 10, csr: 0x300 }); }
+    fn test_csrrc()  { assert_eq!(decode(0x30053073), Inst::Csrrc  { rd: 0, rs1: 10, csr: 0x300 }); }
     #[test]
     fn test_csrrwi() { assert_eq!(decode(0x30055073), Inst::Csrrwi { rd: 0, uimm: 10, csr: 0x300 }); }
     #[test]
-    fn test_csrrsi() { assert_eq!(decode(0x30065073), Inst::Csrrsi { rd: 0, uimm: 10, csr: 0x300 }); }
+    fn test_csrrsi() { assert_eq!(decode(0x30056073), Inst::Csrrsi { rd: 0, uimm: 10, csr: 0x300 }); }
     #[test]
-    fn test_csrrci() { assert_eq!(decode(0x30075073), Inst::Csrrci { rd: 0, uimm: 10, csr: 0x300 }); }
+    fn test_csrrci() { assert_eq!(decode(0x30057073), Inst::Csrrci { rd: 0, uimm: 10, csr: 0x300 }); }
 
     // ---- 32-bit immediate ALU (RV64) ----
     #[test]
