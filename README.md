@@ -1,6 +1,6 @@
 # risc-v virtual machine
 
-Minimal **RV64IMA** RISC-V VM in pure Rust (no deps). Boots S-mode kernels (xv6, Linux) via SBI or M-mode binaries.
+Minimal **RV64IMA** RISC-V VM in pure Rust. Boots S-mode kernels (xv6, Linux) via SBI or M-mode binaries.
 
 ```
 cargo run                                     # fib(10) demo
@@ -16,7 +16,7 @@ cargo run -- --sbi --debug kernel             # with debugger
 
 ## Debugger
 
-![debug](debug.png)
+Each step shows one line: `pc  raw_instruction_hex`
 
 | Command | Description |
 |---------|-------------|
