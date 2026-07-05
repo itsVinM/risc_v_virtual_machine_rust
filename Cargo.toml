@@ -1,3 +1,6 @@
+[workspace]
+members = ["riscv-disas-macros"]
+
 [package]
 name = "risc_v_virtual_machine"
 version = "0.1.0"
@@ -6,6 +9,9 @@ edition = "2021"
 [[bin]]
 name = "riscv-vm"
 path = "src/main.rs"
+
+[dependencies]
+riscv-disas-macros = { path = "riscv-disas-macros" }
 
 [profile.release]
 opt-level = 3
