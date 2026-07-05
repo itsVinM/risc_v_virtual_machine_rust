@@ -1,8 +1,8 @@
 /// All RISC-V instruction formats decoded via bit manipulation (no string parsing).
+/// Disassembly format strings are provided in `// instr("...")` comments and
+/// processed by build.rs to generate `disassemble_inner()`.
 
-use riscv_disas_macros::Disassemble;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Disassemble)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Inst {
     // RV64I — Lui/Auipc handled manually (imm >> 12 transform)
     Lui   { rd: u8, imm: i64 },
@@ -13,157 +13,159 @@ pub enum Inst {
     ScW { rd: u8, rs1: u8, rs2: u8, aq: bool, rl: bool },
     LrD { rd: u8, rs1: u8, aq: bool, rl: bool },
     ScD { rd: u8, rs1: u8, rs2: u8, aq: bool, rl: bool },
-    #[instr("auipc   {rd}, 0x{imm:x}")]
+    // instr("auipc   {rd}, 0x{imm:x}")
     Auipc { rd: u8, imm: i64 },
-    #[instr("jal     {rd}, {imm:+}")]
+    // instr("jal     {rd}, {imm:+}")
     Jal   { rd: u8, imm: i64 },
-    #[instr("jalr    {rd}, {imm}({rs1})")]
+    // instr("jalr    {rd}, {imm}({rs1})")
     Jalr  { rd: u8, rs1: u8, imm: i64 },
-    #[instr("beq     {rs1}, {rs2}, {imm:+}")]
+    // instr("beq     {rs1}, {rs2}, {imm:+}")
     Beq   { rs1: u8, rs2: u8, imm: i64 },
-    #[instr("bne     {rs1}, {rs2}, {imm:+}")]
+    // instr("bne     {rs1}, {rs2}, {imm:+}")
     Bne   { rs1: u8, rs2: u8, imm: i64 },
-    #[instr("blt     {rs1}, {rs2}, {imm:+}")]
+    // instr("blt     {rs1}, {rs2}, {imm:+}")
     Blt   { rs1: u8, rs2: u8, imm: i64 },
-    #[instr("bge     {rs1}, {rs2}, {imm:+}")]
+    // instr("bge     {rs1}, {rs2}, {imm:+}")
     Bge   { rs1: u8, rs2: u8, imm: i64 },
-    #[instr("bltu    {rs1}, {rs2}, {imm:+}")]
+    // instr("bltu    {rs1}, {rs2}, {imm:+}")
     Bltu  { rs1: u8, rs2: u8, imm: i64 },
-    #[instr("bgeu    {rs1}, {rs2}, {imm:+}")]
+    // instr("bgeu    {rs1}, {rs2}, {imm:+}")
     Bgeu  { rs1: u8, rs2: u8, imm: i64 },
-    #[instr("lb      {rd}, {imm}({rs1})")]
+    // instr("lb      {rd}, {imm}({rs1})")
     Lb    { rd: u8, rs1: u8, imm: i64 },
-    #[instr("lh      {rd}, {imm}({rs1})")]
+    // instr("lh      {rd}, {imm}({rs1})")
     Lh    { rd: u8, rs1: u8, imm: i64 },
-    #[instr("lw      {rd}, {imm}({rs1})")]
+    // instr("lw      {rd}, {imm}({rs1})")
     Lw    { rd: u8, rs1: u8, imm: i64 },
-    #[instr("ld      {rd}, {imm}({rs1})")]
+    // instr("ld      {rd}, {imm}({rs1})")
     Ld    { rd: u8, rs1: u8, imm: i64 },
-    #[instr("lbu     {rd}, {imm}({rs1})")]
+    // instr("lbu     {rd}, {imm}({rs1})")
     Lbu   { rd: u8, rs1: u8, imm: i64 },
-    #[instr("lhu     {rd}, {imm}({rs1})")]
+    // instr("lhu     {rd}, {imm}({rs1})")
     Lhu   { rd: u8, rs1: u8, imm: i64 },
-    #[instr("lwu     {rd}, {imm}({rs1})")]
+    // instr("lwu     {rd}, {imm}({rs1})")
     Lwu   { rd: u8, rs1: u8, imm: i64 },
-    #[instr("sb      {rs2}, {imm}({rs1})")]
+    // instr("sb      {rs2}, {imm}({rs1})")
     Sb    { rs1: u8, rs2: u8, imm: i64 },
-    #[instr("sh      {rs2}, {imm}({rs1})")]
+    // instr("sh      {rs2}, {imm}({rs1})")
     Sh    { rs1: u8, rs2: u8, imm: i64 },
-    #[instr("sw      {rs2}, {imm}({rs1})")]
+    // instr("sw      {rs2}, {imm}({rs1})")
     Sw    { rs1: u8, rs2: u8, imm: i64 },
-    #[instr("sd      {rs2}, {imm}({rs1})")]
+    // instr("sd      {rs2}, {imm}({rs1})")
     Sd    { rs1: u8, rs2: u8, imm: i64 },
     // Addi — handled manually (li/mv pseudo-instructions)
     Addi  { rd: u8, rs1: u8, imm: i64 },
-    #[instr("slti    {rd}, {rs1}, {imm}")]
+    // instr("slti    {rd}, {rs1}, {imm}")
     Slti  { rd: u8, rs1: u8, imm: i64 },
-    #[instr("sltiu   {rd}, {rs1}, {imm}")]
+    // instr("sltiu   {rd}, {rs1}, {imm}")
     Sltiu { rd: u8, rs1: u8, imm: i64 },
-    #[instr("xori    {rd}, {rs1}, {imm}")]
+    // instr("xori    {rd}, {rs1}, {imm}")
     Xori  { rd: u8, rs1: u8, imm: i64 },
-    #[instr("ori     {rd}, {rs1}, {imm}")]
+    // instr("ori     {rd}, {rs1}, {imm}")
     Ori   { rd: u8, rs1: u8, imm: i64 },
-    #[instr("andi    {rd}, {rs1}, {imm}")]
+    // instr("andi    {rd}, {rs1}, {imm}")
     Andi  { rd: u8, rs1: u8, imm: i64 },
-    #[instr("slli    {rd}, {rs1}, {shamt}")]
+    // instr("slli    {rd}, {rs1}, {shamt}")
     Slli  { rd: u8, rs1: u8, shamt: u8 },
-    #[instr("srli    {rd}, {rs1}, {shamt}")]
+    // instr("srli    {rd}, {rs1}, {shamt}")
     Srli  { rd: u8, rs1: u8, shamt: u8 },
-    #[instr("srai    {rd}, {rs1}, {shamt}")]
+    // instr("srai    {rd}, {rs1}, {shamt}")
     Srai  { rd: u8, rs1: u8, shamt: u8 },
-    #[instr("add     {rd}, {rs1}, {rs2}")]
+    // instr("add     {rd}, {rs1}, {rs2}")
     Add   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("sub     {rd}, {rs1}, {rs2}")]
+    // instr("sub     {rd}, {rs1}, {rs2}")
     Sub   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("sll     {rd}, {rs1}, {rs2}")]
+    // instr("sll     {rd}, {rs1}, {rs2}")
     Sll   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("slt     {rd}, {rs1}, {rs2}")]
+    // instr("slt     {rd}, {rs1}, {rs2}")
     Slt   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("sltu    {rd}, {rs1}, {rs2}")]
+    // instr("sltu    {rd}, {rs1}, {rs2}")
     Sltu  { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("xor     {rd}, {rs1}, {rs2}")]
+    // instr("xor     {rd}, {rs1}, {rs2}")
     Xor   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("srl     {rd}, {rs1}, {rs2}")]
+    // instr("srl     {rd}, {rs1}, {rs2}")
     Srl   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("sra     {rd}, {rs1}, {rs2}")]
+    // instr("sra     {rd}, {rs1}, {rs2}")
     Sra   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("or      {rd}, {rs1}, {rs2}")]
+    // instr("or      {rd}, {rs1}, {rs2}")
     Or    { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("and     {rd}, {rs1}, {rs2}")]
+    // instr("and     {rd}, {rs1}, {rs2}")
     And   { rd: u8, rs1: u8, rs2: u8 },
     // RV64I W-suffix (32-bit ops sign-extended)
-    #[instr("addiw   {rd}, {rs1}, {imm}")]
+    // instr("addiw   {rd}, {rs1}, {imm}")
     Addiw { rd: u8, rs1: u8, imm: i64 },
-    #[instr("slliw   {rd}, {rs1}, {shamt}")]
+    // instr("slliw   {rd}, {rs1}, {shamt}")
     Slliw { rd: u8, rs1: u8, shamt: u8 },
-    #[instr("srliw   {rd}, {rs1}, {shamt}")]
+    // instr("srliw   {rd}, {rs1}, {shamt}")
     Srliw { rd: u8, rs1: u8, shamt: u8 },
-    #[instr("sraiw   {rd}, {rs1}, {shamt}")]
+    // instr("sraiw   {rd}, {rs1}, {shamt}")
     Sraiw { rd: u8, rs1: u8, shamt: u8 },
-    #[instr("addw    {rd}, {rs1}, {rs2}")]
+    // instr("addw    {rd}, {rs1}, {rs2}")
     Addw  { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("subw    {rd}, {rs1}, {rs2}")]
+    // instr("subw    {rd}, {rs1}, {rs2}")
     Subw  { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("sllw    {rd}, {rs1}, {rs2}")]
+    // instr("sllw    {rd}, {rs1}, {rs2}")
     Sllw  { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("srlw    {rd}, {rs1}, {rs2}")]
+    // instr("srlw    {rd}, {rs1}, {rs2}")
     Srlw  { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("sraw    {rd}, {rs1}, {rs2}")]
+    // instr("sraw    {rd}, {rs1}, {rs2}")
     Sraw  { rd: u8, rs1: u8, rs2: u8 },
     // RV64M
-    #[instr("mul     {rd}, {rs1}, {rs2}")]
+    // instr("mul     {rd}, {rs1}, {rs2}")
     Mul    { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("mulh    {rd}, {rs1}, {rs2}")]
+    // instr("mulh    {rd}, {rs1}, {rs2}")
     Mulh   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("mulhsu  {rd}, {rs1}, {rs2}")]
+    // instr("mulhsu  {rd}, {rs1}, {rs2}")
     Mulhsu { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("mulhu   {rd}, {rs1}, {rs2}")]
+    // instr("mulhu   {rd}, {rs1}, {rs2}")
     Mulhu  { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("div     {rd}, {rs1}, {rs2}")]
+    // instr("div     {rd}, {rs1}, {rs2}")
     Div    { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("divu    {rd}, {rs1}, {rs2}")]
+    // instr("divu    {rd}, {rs1}, {rs2}")
     Divu   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("rem     {rd}, {rs1}, {rs2}")]
+    // instr("rem     {rd}, {rs1}, {rs2}")
     Rem    { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("remu    {rd}, {rs1}, {rs2}")]
+    // instr("remu    {rd}, {rs1}, {rs2}")
     Remu   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("mulw    {rd}, {rs1}, {rs2}")]
+    // instr("mulw    {rd}, {rs1}, {rs2}")
     Mulw   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("divw    {rd}, {rs1}, {rs2}")]
+    // instr("divw    {rd}, {rs1}, {rs2}")
     Divw   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("divuw   {rd}, {rs1}, {rs2}")]
+    // instr("divuw   {rd}, {rs1}, {rs2}")
     Divuw  { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("remw    {rd}, {rs1}, {rs2}")]
+    // instr("remw    {rd}, {rs1}, {rs2}")
     Remw   { rd: u8, rs1: u8, rs2: u8 },
-    #[instr("remuw   {rd}, {rs1}, {rs2}")]
+    // instr("remuw   {rd}, {rs1}, {rs2}")
     Remuw  { rd: u8, rs1: u8, rs2: u8 },
     // System
-    #[instr("ecall")]
+    // instr("ecall")
     Ecall,
-    #[instr("ebreak")]
+    // instr("ebreak")
     Ebreak,
-    #[instr("fence")]
+    // instr("fence")
     Fence,
-    #[instr("csrrw   {rd}, 0x{csr:03x}, {rs1}")]
+    // instr("csrrw   {rd}, 0x{csr:03x}, {rs1}")
     Csrrw  { rd: u8, rs1: u8, csr: u16 },
-    #[instr("csrrs   {rd}, 0x{csr:03x}, {rs1}")]
+    // instr("csrrs   {rd}, 0x{csr:03x}, {rs1}")
     Csrrs  { rd: u8, rs1: u8, csr: u16 },
-    #[instr("csrrc   {rd}, 0x{csr:03x}, {rs1}")]
+    // instr("csrrc   {rd}, 0x{csr:03x}, {rs1}")
     Csrrc  { rd: u8, rs1: u8, csr: u16 },
-    #[instr("csrrwi  {rd}, 0x{csr:03x}, {uimm}")]
+    // instr("csrrwi  {rd}, 0x{csr:03x}, {uimm}")
     Csrrwi { rd: u8, uimm: u8, csr: u16 },
-    #[instr("csrrsi  {rd}, 0x{csr:03x}, {uimm}")]
+    // instr("csrrsi  {rd}, 0x{csr:03x}, {uimm}")
     Csrrsi { rd: u8, uimm: u8, csr: u16 },
-    #[instr("csrrci  {rd}, 0x{csr:03x}, {uimm}")]
+    // instr("csrrci  {rd}, 0x{csr:03x}, {uimm}")
     Csrrci { rd: u8, uimm: u8, csr: u16 },
     // Mret / Sret
-    #[instr("mret")]
+    // instr("mret")
     Mret,
-    #[instr("sret")]
+    // instr("sret")
     Sret,
-    #[instr("illegal {_0:#010x}")]
+    // instr("illegal {_0:#010x}")
     Illegal(u32),
 }
+
+include!(concat!(env!("OUT_DIR"), "/disassemble.rs"));
 
 // BIT FIELD HELPERS: extract bits from a raw instruction word (u32).
 #[inline(always)] fn bits(x: u32, lo: u32, hi: u32) -> u32 { (x >> lo) & ((1 << (hi - lo + 1)) - 1) }
