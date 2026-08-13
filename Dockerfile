@@ -5,7 +5,6 @@
 #   - Rust (stable, pinned)     -> the VM itself (cargo build/test/run)
 #   - riscv64 cross GCC         -> freestanding C kernel (kernel/)
 #   - gdb-multiarch             -> debugging the kernel guest
-#   - qemu-system-riscv64       -> cross-check the kernel against real RISC-V
 #   - clang/gcc + cmake         -> C++20 host tooling (tools/)
 #
 # Base image is pinned by digest for reproducibility.
@@ -20,7 +19,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-riscv64-linux-gnu \
         binutils-riscv64-linux-gnu \
         gdb-multiarch \
-        qemu-system-misc \
         clang \
         cmake \
         ninja-build \
