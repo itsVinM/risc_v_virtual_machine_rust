@@ -1,0 +1,13 @@
+target
+build
+tools/build
+kernel/build
+.git
+.idea
+.vscode
+debug.png
+xv6-kernel
+Dockerfile
+.dockerignore
+Makefile
+rust-toolchain.toml

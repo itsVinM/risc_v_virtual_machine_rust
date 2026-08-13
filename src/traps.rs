@@ -1,11 +1,6 @@
 use crate::cpu::csr::{
-    MIP_MEIP, MIP_MSIP, MIP_MTIP,
-    MIP_SEIP, MIP_SSIP, MIP_STIP,
-    MSTATUS_MIE, MSTATUS_SIE,
-    Privilege,
+    Privilege, MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP, MIP_SSIP, MIP_STIP, MSTATUS_MIE, MSTATUS_SIE,
 };
-
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -32,28 +27,31 @@ pub enum TrapCause {
 impl TrapCause {
     pub fn code(self) -> u64 {
         match self {
-            Self::InstructionAddressMisaligned  => 0,
-            Self::InstructionAccessFault        => 1,
-            Self::IllegalInstruction(_)         => 2,
-            Self::Breakpoint                    => 3,
-            Self::LoadAddressMisaligned         => 4,
-            Self::LoadAccessFault               => 5,
-            Self::StoreAddressMisaligned       => 6,
-            Self::StoreAccessFault             => 7,
-            Self::EcallFromU                   => 8,
-            Self::EcallFromS                   => 9,
-            Self::EcallFromM                   => 11,
-            Self::InstructionPageFault         => 12,
-            Self::LoadPageFault                => 13,
-            Self::StorePageFault               => 15,
-            Self::SoftwareInterrupt            => (1 << 63) | 3,
-            Self::TimerInterrupt               => (1 << 63) | 7,
-            Self::ExternalInterrupt            => (1 << 63) | 11,
+            Self::InstructionAddressMisaligned => 0,
+            Self::InstructionAccessFault => 1,
+            Self::IllegalInstruction(_) => 2,
+            Self::Breakpoint => 3,
+            Self::LoadAddressMisaligned => 4,
+            Self::LoadAccessFault => 5,
+            Self::StoreAddressMisaligned => 6,
+            Self::StoreAccessFault => 7,
+            Self::EcallFromU => 8,
+            Self::EcallFromS => 9,
+            Self::EcallFromM => 11,
+            Self::InstructionPageFault => 12,
+            Self::LoadPageFault => 13,
+            Self::StorePageFault => 15,
+            Self::SoftwareInterrupt => (1 << 63) | 3,
+            Self::TimerInterrupt => (1 << 63) | 7,
+            Self::ExternalInterrupt => (1 << 63) | 11,
         }
     }
 
     pub fn is_interrupt(self) -> bool {
-        matches!(self, Self::SoftwareInterrupt | Self::TimerInterrupt | Self::ExternalInterrupt)
+        matches!(
+            self,
+            Self::SoftwareInterrupt | Self::TimerInterrupt | Self::ExternalInterrupt
+        )
     }
 
     pub fn exception_code(self) -> u64 {
@@ -77,10 +75,11 @@ pub fn pending_interrupt(
     };
 
     if m_enabled {
-        for &(mask, cause, delegated) in &
-            [ (MIP_MEIP, TrapCause::ExternalInterrupt, true),
-              (MIP_MTIP, TrapCause::TimerInterrupt, true),
-              (MIP_MSIP, TrapCause::SoftwareInterrupt, true), ] as &[(u64, TrapCause, bool); 3]
+        for &(mask, cause, delegated) in &[
+            (MIP_MEIP, TrapCause::ExternalInterrupt, true),
+            (MIP_MTIP, TrapCause::TimerInterrupt, true),
+            (MIP_MSIP, TrapCause::SoftwareInterrupt, true),
+        ] as &[(u64, TrapCause, bool); 3]
         {
             if pending & mask != 0 {
                 return Some((cause, delegated));
@@ -100,10 +99,11 @@ pub fn pending_interrupt(
     };
 
     if s_enabled {
-        for &(bit, cause, _) in &
-            [ (MIP_SEIP, TrapCause::ExternalInterrupt, false),
-              (MIP_STIP, TrapCause::TimerInterrupt, false),
-              (MIP_SSIP, TrapCause::SoftwareInterrupt, false), ] as &[(u64, TrapCause, bool); 3]
+        for &(bit, cause, _) in &[
+            (MIP_SEIP, TrapCause::ExternalInterrupt, false),
+            (MIP_STIP, TrapCause::TimerInterrupt, false),
+            (MIP_SSIP, TrapCause::SoftwareInterrupt, false),
+        ] as &[(u64, TrapCause, bool); 3]
         {
             if pending & bit != 0 && (mideleg & bit) != 0 {
                 return Some((cause, true));

@@ -6,12 +6,16 @@ const FDT_COMPAT: u32 = 16;
 
 // FDT tokens
 const FDT_BEGIN_NODE: u32 = 0x00000001;
-const FDT_END_NODE: u32   = 0x00000002;
-const FDT_PROP: u32       = 0x00000003;
-const FDT_END: u32        = 0x00000009;
+const FDT_END_NODE: u32 = 0x00000002;
+const FDT_PROP: u32 = 0x00000003;
+const FDT_END: u32 = 0x00000009;
 
-fn u32_to_be(v: u32) -> [u8; 4] { v.to_be_bytes() }
-fn u64_to_be(v: u64) -> [u8; 8] { v.to_be_bytes() }
+fn u32_to_be(v: u32) -> [u8; 4] {
+    v.to_be_bytes()
+}
+fn u64_to_be(v: u64) -> [u8; 8] {
+    v.to_be_bytes()
+}
 
 struct FdtWriter {
     buf: Vec<u8>,
@@ -21,14 +25,24 @@ struct FdtWriter {
 
 impl FdtWriter {
     fn new() -> Self {
-        Self { buf: Vec::new(), str_off: 0, strtab: Vec::new() }
+        Self {
+            buf: Vec::new(),
+            str_off: 0,
+            strtab: Vec::new(),
+        }
     }
 
-    fn u32(&mut self, v: u32) { self.buf.extend_from_slice(&u32_to_be(v)); }
-    fn bytes(&mut self, b: &[u8]) { self.buf.extend_from_slice(b); }
+    fn u32(&mut self, v: u32) {
+        self.buf.extend_from_slice(&u32_to_be(v));
+    }
+    fn bytes(&mut self, b: &[u8]) {
+        self.buf.extend_from_slice(b);
+    }
 
     fn align4(&mut self) {
-        while self.buf.len() % 4 != 0 { self.buf.push(0); }
+        while !self.buf.len().is_multiple_of(4) {
+            self.buf.push(0);
+        }
     }
 
     fn add_string(&mut self, s: &str) -> u32 {
@@ -46,7 +60,9 @@ impl FdtWriter {
         self.align4();
     }
 
-    fn end_node(&mut self) { self.u32(FDT_END_NODE); }
+    fn end_node(&mut self) {
+        self.u32(FDT_END_NODE);
+    }
 
     fn prop(&mut self, name: &str, val: &[u8]) {
         let name_off = self.add_string(name);
@@ -63,7 +79,9 @@ impl FdtWriter {
 
     fn prop_cells(&mut self, name: &str, vals: &[u32]) {
         let mut data = Vec::new();
-        for &v in vals { data.extend_from_slice(&u32_to_be(v)); }
+        for &v in vals {
+            data.extend_from_slice(&u32_to_be(v));
+        }
         self.prop(name, &data);
     }
 
@@ -118,7 +136,10 @@ pub fn generate_dtb() -> Vec<u8> {
 
     // Chosen
     f.begin_node("chosen");
-    f.prop_str("bootargs", "console=ttyS0 earlycon=uart8250,mmio,0x10000000 root=/dev/vda1 rw");
+    f.prop_str(
+        "bootargs",
+        "console=ttyS0 earlycon=uart8250,mmio,0x10000000 root=/dev/vda1 rw",
+    );
     f.prop_str("stdout-path", "/soc/uart@10000000");
     f.end_node();
 

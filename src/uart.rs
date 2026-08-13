@@ -1,7 +1,7 @@
 use crate::traps::TrapCause;
 
 pub const UART_BASE: u64 = 0x1000_0000;
-pub const UART_END:  u64 = 0x1000_0FFF;
+pub const UART_END: u64 = 0x1000_0FFF;
 
 // 8250 UART register offsets (DLAB=0)
 const THR: u64 = 0; // TX (write)

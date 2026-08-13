@@ -2,15 +2,13 @@ pub mod csr;
 pub mod decoder;
 pub mod executor;
 
-use crate::mmu::Mmu as Bus;
-use crate::traps::{TrapCause, pending_interrupt};
 use crate::cpu::csr::{
-    CsrFile, Privilege,
-    CSR_MSTATUS, CSR_MEPC, CSR_MCAUSE, CSR_MTVAL, CSR_MTVEC,
-    CSR_SEPC, CSR_STVEC, CSR_SCAUSE, CSR_STVAL,
-    MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP,
-    MSTATUS_SIE, MSTATUS_SPIE, MSTATUS_SPP,
+    CsrFile, Privilege, CSR_MCAUSE, CSR_MEPC, CSR_MSTATUS, CSR_MTVAL, CSR_MTVEC, CSR_SCAUSE,
+    CSR_SEPC, CSR_STVAL, CSR_STVEC, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_SIE,
+    MSTATUS_SPIE, MSTATUS_SPP,
 };
+use crate::mmu::Mmu as Bus;
+use crate::traps::{pending_interrupt, TrapCause};
 use decoder::decode;
 use executor::execute;
 
@@ -23,8 +21,8 @@ pub enum StepResult {
 
 pub struct Cpu {
     pub regs: [u64; 32],
-    pub pc:   u64,
-    pub csr:  CsrFile,
+    pub pc: u64,
+    pub csr: CsrFile,
     pub halted: bool,
     pub priv_level: Privilege,
 }
@@ -33,19 +31,30 @@ impl Cpu {
     pub fn new(entry: u64) -> Self {
         let mut regs = [0u64; 32];
         regs[2] = crate::mmu::DRAM_END;
-        Self { regs, pc: entry, csr: CsrFile::new(), halted: false, priv_level: Privilege::M }
+        Self {
+            regs,
+            pc: entry,
+            csr: CsrFile::new(),
+            halted: false,
+            priv_level: Privilege::M,
+        }
     }
 
     pub fn step(&mut self, bus: &mut Bus) -> StepResult {
-        if self.halted { return StepResult::Halted; }
+        if self.halted {
+            return StepResult::Halted;
+        }
 
         bus.tick();
         self.csr.inc_cycle();
 
         // Check pending interrupts — both M and S level
         if let Some((irq, delegated)) = pending_interrupt(
-            self.csr.mstatus(), self.csr.mie(), self.csr.mip(),
-            self.priv_level, self.csr.mideleg(),
+            self.csr.mstatus(),
+            self.csr.mie(),
+            self.csr.mip(),
+            self.priv_level,
+            self.csr.mideleg(),
         ) {
             if delegated && self.priv_level < Privilege::M {
                 // Delegate to S-mode
@@ -58,11 +67,16 @@ impl Cpu {
         }
 
         // Fetch with virtual memory translation
-        let fetch_pa = translate_fetch(self.pc, self.priv_level, bus, self.csr.read(csr::CSR_SATP, Privilege::M))
-            .unwrap_or(self.pc);
+        let fetch_pa = translate_fetch(
+            self.pc,
+            self.priv_level,
+            bus,
+            self.csr.read(csr::CSR_SATP, Privilege::M),
+        )
+        .unwrap_or(self.pc);
 
         let raw = match bus.read32(fetch_pa) {
-            Ok(v)  => v,
+            Ok(v) => v,
             Err(_e) => {
                 let cause = if self.priv_level >= Privilege::S {
                     TrapCause::InstructionAccessFault
@@ -74,7 +88,14 @@ impl Cpu {
             }
         };
 
-        let result = execute(decode(raw), self.pc, &mut self.regs, &mut self.csr, bus, self.priv_level);
+        let result = execute(
+            decode(raw),
+            self.pc,
+            &mut self.regs,
+            &mut self.csr,
+            bus,
+            self.priv_level,
+        );
         self.csr.inc_instret();
 
         if result.halt {
@@ -89,8 +110,8 @@ impl Cpu {
                 _ => {
                     let medeleg = self.csr.medeleg();
                     let exc_code = trap.exception_code();
-                    let delegate = self.priv_level <= Privilege::S
-                        && (medeleg & (1 << exc_code)) != 0;
+                    let delegate =
+                        self.priv_level <= Privilege::S && (medeleg & (1 << exc_code)) != 0;
                     if delegate && self.priv_level < Privilege::M {
                         self.take_s_trap(trap, self.pc, 0);
                     } else {
@@ -101,7 +122,9 @@ impl Cpu {
             return StepResult::Trap(trap);
         }
 
-        if let Some(new) = result.new_priv { self.priv_level = new; }
+        if let Some(new) = result.new_priv {
+            self.priv_level = new;
+        }
         self.regs[0] = 0;
         self.pc = result.next_pc;
         StepResult::Ok
@@ -155,10 +178,9 @@ impl Cpu {
 
     pub fn reg_name(r: usize) -> &'static str {
         const NAMES: [&str; 32] = [
-            "zero","ra","sp","gp","tp","t0","t1","t2",
-            "s0","s1","a0","a1","a2","a3","a4","a5",
-            "a6","a7","s2","s3","s4","s5","s6","s7",
-            "s8","s9","s10","s11","t3","t4","t5","t6",
+            "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3",
+            "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11",
+            "t3", "t4", "t5", "t6",
         ];
         NAMES[r]
     }

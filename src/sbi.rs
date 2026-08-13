@@ -49,15 +49,27 @@ pub struct SbiResult {
 }
 
 impl SbiResult {
-    pub const fn ok() -> Self { Self { a0: SBI_SUCCESS, halt: false } }
-    pub const fn value(v: u64) -> Self { Self { a0: v, halt: false } }
-    pub const fn not_supported() -> Self { 
-        Self { a0: SBI_ERR_NOT_SUPPORTED, halt: false } }
-    pub const fn halt() -> Self { Self { a0: 0, halt: true } }
+    pub const fn ok() -> Self {
+        Self {
+            a0: SBI_SUCCESS,
+            halt: false,
+        }
+    }
+    pub const fn value(v: u64) -> Self {
+        Self { a0: v, halt: false }
+    }
+    pub const fn not_supported() -> Self {
+        Self {
+            a0: SBI_ERR_NOT_SUPPORTED,
+            halt: false,
+        }
+    }
+    pub const fn halt() -> Self {
+        Self { a0: 0, halt: true }
+    }
 }
 
-pub fn handle_sbi(a7: u64, a0: u64, _a1: u64, _a2: u64, a6: u64, bus: &mut Mmu) -> 
-SbiResult {
+pub fn handle_sbi(a7: u64, a0: u64, _a1: u64, _a2: u64, a6: u64, bus: &mut Mmu) -> SbiResult {
     match a7 {
         // Legacy extensions
         SBI_SET_TIMER => {
@@ -65,12 +77,15 @@ SbiResult {
             SbiResult::ok()
         }
         SBI_CONSOLE_PUTCHAR => {
-            let _ = bus.write8(uart::UART_BASE as u64, a0 as u8);
+            let _ = bus.write8(uart::UART_BASE, a0 as u8);
             SbiResult::ok()
         }
-        SBI_CONSOLE_GETCHAR | SBI_CLEAR_IPI | 
-        SBI_SEND_IPI | SBI_REMOTE_FENCE_I
-        | SBI_REMOTE_SFENCE_VMA | SBI_REMOTE_SFENCE_VMA_ASID => SbiResult::ok(),
+        SBI_CONSOLE_GETCHAR
+        | SBI_CLEAR_IPI
+        | SBI_SEND_IPI
+        | SBI_REMOTE_FENCE_I
+        | SBI_REMOTE_SFENCE_VMA
+        | SBI_REMOTE_SFENCE_VMA_ASID => SbiResult::ok(),
         SBI_SHUTDOWN => SbiResult::halt(),
         // v0.2 extensions
         SBI_EXT_BASE => handle_sbi_base(a6, a0),
@@ -85,17 +100,22 @@ SbiResult {
         SBI_EXT_HSM | SBI_EXT_SRST => match a6 {
             SBI_HSM_HART_STOP | SBI_SRST_SYSTEM_RESET => SbiResult::halt(),
             _ => SbiResult::not_supported(),
-        }
+        },
         SBI_EXT_DBCN => handle_sbi_dbcn(a6, a0, _a1, _a2, bus),
         _ => SbiResult::not_supported(),
     }
 }
 
-fn handle_sbi_dbcn(func_id: u64, buf_addr: u64, buf_len: u64, _out_len_addr: u64, 
-bus: &mut Mmu) -> SbiResult {
+fn handle_sbi_dbcn(
+    func_id: u64,
+    buf_addr: u64,
+    buf_len: u64,
+    _out_len_addr: u64,
+    bus: &mut Mmu,
+) -> SbiResult {
     match func_id {
         SBI_DBCN_CONSOLE_WRITE_BYTE => {
-            let _ = bus.write8(uart::UART_BASE as u64, buf_addr as u8);
+            let _ = bus.write8(uart::UART_BASE, buf_addr as u8);
             SbiResult::ok()
         }
         SBI_DBCN_CONSOLE_WRITE => {
@@ -103,7 +123,7 @@ bus: &mut Mmu) -> SbiResult {
             for i in 0..buf_len {
                 let addr = buf_addr.wrapping_add(i);
                 if let Ok(byte) = bus.read8(addr) {
-                    let _ = bus.write8(uart::UART_BASE as u64, byte);
+                    let _ = bus.write8(uart::UART_BASE, byte);
                     written = i + 1;
                 } else {
                     break;
@@ -121,10 +141,16 @@ fn handle_sbi_base(func_id: u64, ext_id: u64) -> SbiResult {
         SBI_BASE_GET_SPEC_VERSION => SbiResult::value(2),
         SBI_BASE_GET_IMP_ID => SbiResult::value(1),
         SBI_BASE_GET_IMP_VERSION => SbiResult::value(1),
-        SBI_BASE_PROBE_EXT => SbiResult::value(
-            matches!(ext_id, SBI_EXT_BASE | SBI_EXT_TIME | 
-                SBI_EXT_IPI | SBI_EXT_RFENCE | 
-                SBI_EXT_HSM | SBI_EXT_SRST | SBI_EXT_DBCN) as u64),
+        SBI_BASE_PROBE_EXT => SbiResult::value(matches!(
+            ext_id,
+            SBI_EXT_BASE
+                | SBI_EXT_TIME
+                | SBI_EXT_IPI
+                | SBI_EXT_RFENCE
+                | SBI_EXT_HSM
+                | SBI_EXT_SRST
+                | SBI_EXT_DBCN
+        ) as u64),
         SBI_BASE_GET_MVENDORID => SbiResult::value(0),
         SBI_BASE_GET_MARCHID => SbiResult::value(0),
         SBI_BASE_GET_MIMPID => SbiResult::value(0),

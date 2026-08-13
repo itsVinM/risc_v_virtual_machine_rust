@@ -97,10 +97,16 @@ impl Virtio {
             QUEUE_READY => self.queue_ready = value,
             INTERRUPT_ACK => self.interrupt_status &= !value,
             STATUS => self.status = value,
-            QUEUE_DESC_LOW => self.descriptor_table_addr = set_low(self.descriptor_table_addr, value),
-            QUEUE_DESC_HIGH => self.descriptor_table_addr = set_high(self.descriptor_table_addr, value),
+            QUEUE_DESC_LOW => {
+                self.descriptor_table_addr = set_low(self.descriptor_table_addr, value)
+            }
+            QUEUE_DESC_HIGH => {
+                self.descriptor_table_addr = set_high(self.descriptor_table_addr, value)
+            }
             QUEUE_DRIVER_LOW => self.available_ring_addr = set_low(self.available_ring_addr, value),
-            QUEUE_DRIVER_HIGH => self.available_ring_addr = set_high(self.available_ring_addr, value),
+            QUEUE_DRIVER_HIGH => {
+                self.available_ring_addr = set_high(self.available_ring_addr, value)
+            }
             QUEUE_DEVICE_LOW => self.used_ring_addr = set_low(self.used_ring_addr, value),
             QUEUE_DEVICE_HIGH => self.used_ring_addr = set_high(self.used_ring_addr, value),
             _ => {}
@@ -138,8 +144,12 @@ impl Virtio {
         let mut descriptor_count = 0usize;
 
         for _ in 0..MAX_DESCRIPTOR_CHAIN {
-            let descriptor_offset = pa_to_off(self.descriptor_table_addr + next_descriptor_index as u64 * 16);
-            descriptors[descriptor_count] = (read_u64(dram, descriptor_offset), read_u32(dram, descriptor_offset + 8));
+            let descriptor_offset =
+                pa_to_off(self.descriptor_table_addr + next_descriptor_index as u64 * 16);
+            descriptors[descriptor_count] = (
+                read_u64(dram, descriptor_offset),
+                read_u32(dram, descriptor_offset + 8),
+            );
             let flags = read_u16(dram, descriptor_offset + 12);
             next_descriptor_index = read_u16(dram, descriptor_offset + 14);
             descriptor_count += 1;
