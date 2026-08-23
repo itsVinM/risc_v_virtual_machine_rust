@@ -22,12 +22,18 @@ SECTIONS {
         *(.data .data.*)
     } :data
 
+    _bss_start = .;
     .bss : {
+        *(.sbss .sbss.*)
+        *(.sdata .sdata.*)
         *(.bss .bss.*)
         *(COMMON)
     } :data
+    _bss_end = .;
 
     . = ALIGN(16);
     . += 0x10000;           /* 64 KiB kernel stack, grows down */
     _stack_top = .;
+    . -= 8;
+    _stack_canary = .;
 }

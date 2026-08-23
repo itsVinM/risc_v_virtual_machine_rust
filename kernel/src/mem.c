@@ -1,88 +1,71 @@
 #include "mem.h"
+#include "types.h"
 #include "string.h"
 #include "printf.h"
+#include <stdint.h>
 
 #define HEAP_SIZE (64u * 1024u)
 
-struct block {
-    usize size;         /* usable bytes (excluding this header) */
-    int   free;         /* 1 = free, 0 = allocated */
+typedef struct block {
+    size_t size;       /* usable bytes (excludes header) */
+    int    free;       /* 1 = free, 0 = allocated */
     struct block *next;
-};
+    u8 _pad[8];        /* pad to 16-byte boundary */
+} block_t;
 
-#define HDR sizeof(struct block)
+#define BLOCK_HDR_SIZE sizeof(block_t)
 
-static unsigned char heap[HEAP_SIZE] __attribute__((aligned(16)));
-static struct block *head = NULL;
-static usize heap_offset = 0;   /* bump pointer for extending */
-static usize total_allocs = 0;
+static u8 heap_raw[HEAP_SIZE] __attribute__((aligned(16)));
+static block_t *heap_list;
+static size_t  heap_used;     /* tracks payload bytes allocated */
+static size_t  heap_allocs;
 
-/* Ensure at least one free block exists, extending the heap if needed. */
-static struct block *ensure_block(usize need)
+static void heap_init(void)
 {
-    if (heap_offset + HDR + need > HEAP_SIZE)
-        return NULL;
-
-    struct block *b = (struct block *)(heap + heap_offset);
-    b->size = need;
-    b->free = 1;
-    b->next = NULL;
-
-    /* append to list */
-    if (!head) {
-        head = b;
-    } else {
-        struct block *cur = head;
-        while (cur->next)
-            cur = cur->next;
-        cur->next = b;
-    }
-
-    heap_offset += HDR + need;
-    return b;
+    heap_list = (block_t *)heap_raw;
+    heap_list->size = HEAP_SIZE - BLOCK_HDR_SIZE;
+    heap_list->free = 1;
+    heap_list->next = 0;
+    heap_used = 0;
+    heap_allocs = 0;
 }
 
-static void coalesce(void)
+void *kmalloc(size_t n)
 {
-    struct block *cur = head;
-    while (cur && cur->next) {
-        if (cur->free && cur->next->free) {
-            cur->size += HDR + cur->next->size;
-            cur->next = cur->next->next;
-        } else {
-            cur = cur->next;
-        }
-    }
-}
+    block_t *cur;
 
-void *kmalloc(usize n)
-{
+    if (!heap_list)
+        heap_init();
+
     if (n == 0)
         n = 1;
+    n = (n + 15) & ~(size_t)15;
 
-    /* first-fit search */
-    struct block *cur = head;
+    cur = heap_list;
     while (cur) {
         if (cur->free && cur->size >= n) {
+            /* split if remainder is large enough for another block + payload */
+            if (cur->size >= n + BLOCK_HDR_SIZE + 16) {
+                block_t *split = (block_t *)((u8 *)cur + BLOCK_HDR_SIZE + n);
+                split->size = cur->size - n - BLOCK_HDR_SIZE;
+                split->free = 1;
+                split->next = cur->next;
+                cur->next = split;
+                cur->size = n;
+            }
             cur->free = 0;
-            total_allocs++;
-            return (void *)((char *)cur + HDR);
+            heap_used += cur->size;
+            heap_allocs++;
+            return (void *)(cur + 1);
         }
         cur = cur->next;
     }
 
-    /* no fit — extend */
-    struct block *b = ensure_block(n);
-    if (!b) {
-        printf("kmalloc: out of memory (%lu bytes)\n", n);
-        return NULL;
-    }
-    b->free = 0;
-    total_allocs++;
-    return (void *)((char *)b + HDR);
+    printf("kmalloc: out of memory (%zu bytes requested)\n", n);
+    return 0;
 }
 
-void *kzalloc(usize n)
+void *kzalloc(size_t n)
 {
     void *p = kmalloc(n);
     if (p)
@@ -92,31 +75,45 @@ void *kzalloc(usize n)
 
 void kfree(void *p)
 {
+    block_t *blk, *prev, *cur;
+
     if (!p)
         return;
-    struct block *b = (struct block *)((char *)p - HDR);
-    b->free = 1;
-    coalesce();
-}
 
-usize kmem_used(void)
-{
-    usize used = 0;
-    struct block *cur = head;
-    while (cur) {
-        if (!cur->free)
-            used += cur->size;
+    blk = (block_t *)p - 1;
+    blk->free = 1;
+    heap_used -= blk->size;
+
+    /* coalesce with next */
+    while (blk->next && blk->next->free) {
+        blk->size += BLOCK_HDR_SIZE + blk->next->size;
+        blk->next = blk->next->next;
+    }
+
+    /* coalesce with previous */
+    prev = 0;
+    cur = heap_list;
+    while (cur && cur != blk) {
+        prev = cur;
         cur = cur->next;
     }
-    return used;
+    if (prev && prev->free) {
+        prev->size += BLOCK_HDR_SIZE + blk->size;
+        prev->next = blk->next;
+    }
 }
 
-usize kmem_capacity(void)
+size_t kmem_used(void)
+{
+    return heap_used;
+}
+
+size_t kmem_capacity(void)
 {
     return HEAP_SIZE;
 }
 
-usize kmem_allocs(void)
+size_t kmem_allocs(void)
 {
-    return total_allocs;
+    return heap_allocs;
 }

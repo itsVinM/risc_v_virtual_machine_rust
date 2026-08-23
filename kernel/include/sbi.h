@@ -1,19 +1,18 @@
-#ifndef SBI_H
-#define SBI_H
+#ifndef KERNEL_SBI_H
+#define KERNEL_SBI_H
 
-#include "types.h"
+#include <stdint.h>
 
 struct sbiret {
-    long error;
-    long value;
+    uint64_t error;
+    uint64_t value;
 };
 
-struct sbiret sbi_ecall(int ext, int fid,
-                        u64 a0, u64 a1, u64 a2,
-                        u64 a3, u64 a4, u64 a5);
+struct sbiret sbi_call(uint64_t ext, uint64_t fid,
+                       uint64_t a0, uint64_t a1, uint64_t a2);
 
-struct sbiret sbi_set_timer(u64 stime);
-struct sbiret sbi_send_ipi(u64 hmask, u64 hbase);
-struct sbiret sbi_hart_start(u64 hartid, u64 entry, u64 priv);
+void sbi_set_timer(uint64_t stime);
+void sbi_send_ipi(uint64_t hmask);
+void sbi_hart_start(uint64_t hartid, uint64_t entry, uint64_t priv);
 
 #endif

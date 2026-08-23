@@ -1,10 +1,9 @@
-#ifndef STRING_H
-#define STRING_H
+#ifndef KERNEL_STRING_H
+#define KERNEL_STRING_H
 
-#include "types.h"
+#include <stddef.h>
 
-void *memset(void *s, int c, usize n);
-void *memcpy(void *dst, const void *src, usize n);
-void *memmove(void *dst, const void *src, usize n);
+void *memset(void *s, int c, size_t n);
+void *memcpy(void *dst, const void *src, size_t n);
 
 #endif

@@ -1,13 +1,13 @@
-#ifndef MEM_H
-#define MEM_H
+#ifndef KERNEL_MEM_H
+#define KERNEL_MEM_H
 
-#include "types.h"
+#include <stddef.h>
 
-void *kmalloc(usize n);
-void *kzalloc(usize n);
+void *kmalloc(size_t n);
+void *kzalloc(size_t n);
 void  kfree(void *p);
-usize kmem_used(void);
-usize kmem_capacity(void);
-usize kmem_allocs(void);
+size_t kmem_used(void);
+size_t kmem_capacity(void);
+size_t kmem_allocs(void);
 
 #endif

@@ -5,19 +5,23 @@
 #   make clean
 
 CC := riscv64-linux-gnu-gcc
-CFLAGS := -march=rv64ima -mabi=lp64 -mcmodel=medany \
-	-O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector \
+CFLAGS := -march=rv64ima_zicsr_zifencei -mabi=lp64 -mcmodel=medany \
+	-O2 -g -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector \
 	-fno-pic -fno-pie -nostdlib -static
 LDFLAGS := -nostdlib -static -T linker.ld -Wl,--build-id=none
 
-SRCS := kernel.c uart.c printf.c mem.c
+SRCS := kernel.c uart.c printf.c mem.c string.c sbi.c trap.c
+OBJS := $(SRCS:.c=.o)
 
 .PHONY: all clean
 
 all: kernel
 
-kernel: $(SRCS) linker.ld
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRCS)
+kernel: $(OBJS) linker.ld
+	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f kernel
+	rm -f $(OBJS) kernel
