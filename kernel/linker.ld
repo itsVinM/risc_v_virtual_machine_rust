@@ -9,23 +9,28 @@ PHDRS {
 SECTIONS {
     . = 0x80200000;
 
+    _kernel_start = .;
+
     .text : {
-        *(.text.entry)
+        KEEP(*(.text.entry))
         *(.text .text.*)
     } :text
 
     .rodata : {
         *(.rodata .rodata.*)
+        *(.srodata .srodata.*)
     } :text
 
+    . = ALIGN(8);
     .data : {
+        __global_pointer$ = . + 0x800;
+        *(.sdata .sdata.*)
         *(.data .data.*)
     } :data
 
     _bss_start = .;
     .bss : {
         *(.sbss .sbss.*)
-        *(.sdata .sdata.*)
         *(.bss .bss.*)
         *(COMMON)
     } :data
@@ -36,4 +41,8 @@ SECTIONS {
     _stack_top = .;
     . -= 8;
     _stack_canary = .;
+
+    /* End of kernel image (incl. stack); frame arena starts here. */
+    _kernel_end = .;
+    _end = .;
 }

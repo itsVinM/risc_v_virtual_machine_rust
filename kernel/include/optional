@@ -1,0 +1,38 @@
+#pragma once
+
+// Minimal freestanding subset of <optional>: value-semantic wrapper for
+// trivially-copyable T (kernel use only).
+
+namespace std {
+
+struct nullopt_t {
+    explicit constexpr nullopt_t(int) noexcept {}
+};
+
+inline constexpr nullopt_t nullopt{0};
+
+template <class T>
+class optional {
+public:
+    constexpr optional() noexcept : m_has(false), m_val{} {}
+    constexpr optional(nullopt_t) noexcept : optional() {}
+    constexpr optional(const T &v) noexcept : m_has(true), m_val(v) {}
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept { return m_has; }
+    [[nodiscard]] constexpr bool has_value() const noexcept { return m_has; }
+
+    [[nodiscard]] constexpr T &operator*() noexcept { return m_val; }
+    [[nodiscard]] constexpr const T &operator*() const noexcept { return m_val; }
+    [[nodiscard]] constexpr T *operator->() noexcept { return &m_val; }
+    [[nodiscard]] constexpr const T *operator->() const noexcept { return &m_val; }
+
+    [[nodiscard]] constexpr T value_or(const T &default_value) const noexcept {
+        return m_has ? m_val : default_value;
+    }
+
+private:
+    bool m_has;
+    T m_val;
+};
+
+} // namespace std

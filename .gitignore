@@ -1,4 +1,4 @@
 /target
-kernel/kernel
+/kernel/build
 /tools/build
 .vscode/

@@ -1,0 +1,30 @@
+#pragma once
+
+#include <cstddef>
+
+// Minimal freestanding subset of <array>.
+
+namespace std {
+
+template <class T, size_t N>
+struct array {
+    using value_type = T;
+    using size_type = size_t;
+    using reference = T &;
+    using const_reference = const T &;
+
+    T _elems[N];
+
+    [[nodiscard]] constexpr reference operator[](size_type i) noexcept { return _elems[i]; }
+    [[nodiscard]] constexpr const_reference operator[](size_type i) const noexcept { return _elems[i]; }
+
+    [[nodiscard]] constexpr size_type size() const noexcept { return N; }
+    [[nodiscard]] constexpr bool empty() const noexcept { return N == 0; }
+
+    constexpr void fill(const T &value) noexcept {
+        for (size_type i = 0; i < N; ++i)
+            _elems[i] = value;
+    }
+};
+
+} // namespace std

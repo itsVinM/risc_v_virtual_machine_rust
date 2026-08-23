@@ -1,0 +1,30 @@
+#pragma once
+
+#include <cstdint>
+
+// Minimal freestanding subset of <concepts>.
+
+namespace std {
+
+template <class T, class U>
+inline constexpr bool is_same_v = false;
+
+template <class T>
+inline constexpr bool is_same_v<T, T> = true;
+
+template <class T>
+concept signed_integral =
+    is_same_v<T, signed char> || is_same_v<T, short> || is_same_v<T, int> ||
+    is_same_v<T, long> || is_same_v<T, long long> ||
+    is_same_v<T, int8_t> || is_same_v<T, int16_t> ||
+    is_same_v<T, int32_t> || is_same_v<T, int64_t>;
+
+template <class T>
+concept unsigned_integral =
+    is_same_v<T, unsigned char> || is_same_v<T, unsigned short> ||
+    is_same_v<T, unsigned int> || is_same_v<T, unsigned long> ||
+    is_same_v<T, unsigned long long> ||
+    is_same_v<T, uint8_t> || is_same_v<T, uint16_t> ||
+    is_same_v<T, uint32_t> || is_same_v<T, uint64_t>;
+
+} // namespace std
