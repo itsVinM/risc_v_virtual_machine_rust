@@ -6,7 +6,7 @@ mod traps;
 mod uart;
 mod virtio;
 
-use crate::cpu::csr::{Privilege, CSR_CYCLE, CSR_INSTRET, CSR_MEPC, CSR_MSTATUS};
+use crate::cpu::csr::{Privilege, CSR_CYCLE, CSR_INSTRET, CSR_MEDELEG, CSR_MEPC, CSR_MSTATUS};
 use crate::cpu::{Cpu, StepResult};
 use crate::mmu::{Mmu, DRAM_BASE, DRAM_END};
 use std::{
@@ -119,6 +119,7 @@ fn boot_smode(cpu: &mut Cpu, bus: &mut Bus, entry: u64) -> Result<(), Box<dyn st
 
     let ms = cpu.csr.mstatus() & !(MSTATUS_SPP | MSTATUS_SPIE | MSTATUS_SIE);
     cpu.csr.write(CSR_MSTATUS, ms, Privilege::M);
+    cpu.csr.write(CSR_MEDELEG, u64::MAX, Privilege::M); // all traps -> S-mode
     cpu.csr.write(CSR_MEPC, entry, Privilege::M);
 
     cpu.priv_level = Privilege::S;

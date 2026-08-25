@@ -75,6 +75,9 @@ fn translate(
         return Err(TrapCause::LoadPageFault);
     }
 
+    // Level at which the leaf PTE was found (2 = gigapage, 1 = megapage,
+    // 0 = 4 KiB page). Needed to merge VA index bits into the final PA.
+    let mut leaf_level = 2u64;
     for level in (0..=1).rev() {
         if pte & (PTE_R | PTE_W | PTE_X) != 0 {
             break;
@@ -87,6 +90,7 @@ fn translate(
         if pte & 1 == 0 {
             return Err(TrapCause::LoadPageFault);
         }
+        leaf_level = level;
     }
 
     if pte & (PTE_R | PTE_W | PTE_X) == 0 {
@@ -112,8 +116,8 @@ fn translate(
     }
 
     let ppn = pte_ppn(pte);
-    let offset = va & 0xFFF;
-    let pa = (ppn << 12) | offset;
+    let va_low_bits = 12 + leaf_level * 9;
+    let pa = ((ppn << 12) & !((1u64 << va_low_bits) - 1)) | (va & ((1u64 << va_low_bits) - 1));
 
     Ok(pa)
 }

@@ -13,19 +13,39 @@
 
 extern "C" char _bss_start[];
 extern "C" char _bss_end[];
+extern "C" char __global_pointer$[];
 extern "C" kernel::types::u64 _stack_canary[];
 
 #define STACK_CANARY 0xDEADBEEFCAFEBABEULL
 
-void kmain(kernel::types::u64 hartid, kernel::types::u64 dtb);
+extern "C" void kmain(kernel::types::u64 hartid, kernel::types::u64 dtb);
 static void self_tests();
 
 /*
- * Reset entry point. The VM boots us in M-mode at 0x80200000.
+ * Reset entry point. The VM boots us in S-mode at 0x80200000.
  * a0 = hartid, a1 = dtb physical address.
+ *
+ * Naked: the VM gives us sp == 0, so not a single compiler-generated
+ * instruction may touch memory until we point sp at the real stack.
  */
-extern "C" __attribute__((section(".text.entry")))
-void _start(kernel::types::u64 hartid, kernel::types::u64 dtb)
+extern "C" __attribute__((section(".text.entry"), naked))
+void _start(void)
+{
+    asm volatile(
+        ".option push\n"
+        ".option norelax\n"
+        "   la      gp, __global_pointer$\n"
+        ".option pop\n"
+        ".option push\n"
+        ".option norelax\n"
+        "   la      sp, _stack_top\n"
+        ".option pop\n"
+        "   call    kmain\n"
+        "1: wfi\n"
+        "   j       1b\n");
+}
+
+void kmain(kernel::types::u64 hartid, kernel::types::u64 dtb)
 {
     /* 1. Zero BSS before anything touches globals */
     for (char *p = _bss_start; p < _bss_end; ++p)
@@ -34,15 +54,10 @@ void _start(kernel::types::u64 hartid, kernel::types::u64 dtb)
     /* 2. Write stack canary */
     _stack_canary[0] = STACK_CANARY;
 
-    /* 3. Install M-mode trap handler */
-    kernel::arch::rv64vm::csr_write<kernel::arch::rv64vm::Csr::Mtvec>(
+    /* 3. Install S-mode trap handler */
+    kernel::arch::rv64vm::csr_write<kernel::arch::rv64vm::Csr::Stvec>(
         reinterpret_cast<kernel::types::uptr>(&kernel::trap::trap_handler));
 
-    kmain(hartid, dtb);
-}
-
-void kmain(kernel::types::u64 hartid, kernel::types::u64 dtb)
-{
     /* Check stack canary */
     if (_stack_canary[0] != STACK_CANARY)
         kernel::panic::panic("kernel", __LINE__, "stack smashed");

@@ -198,7 +198,6 @@ fn translate_fetch(pc: u64, priv_level: Privilege, bus: &Bus, satp: u64) -> Resu
     let vpn2 = (pc >> 30) & 0x1FF;
     let vpn1 = (pc >> 21) & 0x1FF;
     let vpn0 = (pc >> 12) & 0x1FF;
-    let offset = pc & 0xFFF;
 
     let root_ppn = satp & ((1u64 << 44) - 1);
     let mut pte_addr = (root_ppn << 12) + (vpn2 * 8);
@@ -212,7 +211,10 @@ fn translate_fetch(pc: u64, priv_level: Privilege, bus: &Bus, satp: u64) -> Resu
         return Err(TrapCause::InstructionPageFault);
     }
 
-    for &vpn in &[vpn1, vpn0] {
+    // Level at which the leaf PTE was found (2 = gigapage, 1 = megapage,
+    // 0 = 4 KiB page). Needed to merge VA index bits into the final PA.
+    let mut leaf_level = 2u64;
+    for (level, vpn) in [(1u64, vpn1), (0u64, vpn0)] {
         if pte & (PTE_R | PTE_W | PTE_X) != 0 {
             break;
         }
@@ -225,6 +227,7 @@ fn translate_fetch(pc: u64, priv_level: Privilege, bus: &Bus, satp: u64) -> Resu
         if pte & 1 == 0 {
             return Err(TrapCause::InstructionPageFault);
         }
+        leaf_level = level;
     }
 
     if pte & PTE_X == 0 {
@@ -232,7 +235,8 @@ fn translate_fetch(pc: u64, priv_level: Privilege, bus: &Bus, satp: u64) -> Resu
     }
 
     let ppn = (pte >> 10) & 0x00FF_FFFF_FFFF;
-    Ok((ppn << 12) | offset)
+    let va_low_bits = 12 + leaf_level * 9;
+    Ok(((ppn << 12) & !((1u64 << va_low_bits) - 1)) | (pc & ((1u64 << va_low_bits) - 1)))
 }
 
 const PTE_R: u64 = 1 << 1;

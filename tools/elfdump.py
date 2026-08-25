@@ -10,117 +10,139 @@ against the rv64vm DRAM window.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
 from rv64elf import PF_R, PF_W, PF_X, Elf, ElfError
 
+log = logging.getLogger(__name__)
+
 DRAM_BASE = 0x8000_0000
 DRAM_END = 0x8800_0000
 
-PHDR_TYPES = {
-    0: "NULL",
-    1: "LOAD",
-    2: "DYNAMIC",
-    3: "INTERP",
-    4: "NOTE",
-    5: "SHLIB",
-    6: "PHDR",
-    7: "TLS",
-}
 
-SHDR_TYPES = {
-    0: "NULL",
-    1: "PROGBITS",
-    2: "SYMTAB",
-    3: "STRTAB",
-    4: "RELA",
-    5: "HASH",
-    6: "DYNAMIC",
-    7: "NOTE",
-    8: "NOBITS",
-    9: "REL",
-    0x7000_0003: "RISCV_ATTRIBUTE",
-}
+class Types:
+    PHDR = {
+        0: "NULL", 1: "LOAD", 2: "DYNAMIC", 3: "INTERP",
+        4: "NOTE", 5: "SHLIB", 6: "PHDR", 7: "TLS",
+    }
 
+    SHDR = {
+        0: "NULL", 1: "PROGBITS", 2: "SYMTAB", 3: "STRTAB",
+        4: "RELA", 5: "HASH", 6: "DYNAMIC", 7: "NOTE",
+        8: "NOBITS", 9: "REL", 0x7000_0003: "RISCV_ATTRIBUTE",
+    }
 
-def phdr_type(t: int) -> str:
-    return PHDR_TYPES.get(t, "OTHER")
+    @staticmethod
+    def phdr(value: int) -> str:
+        return Types.PHDR.get(value, "OTHER")
 
+    @staticmethod
+    def shdr(value: int) -> str:
+        return Types.SHDR.get(value, "OTHER")
 
-def shdr_type(t: int) -> str:
-    return SHDR_TYPES.get(t, "OTHER")
+    @staticmethod
+    def flags(value: int) -> str:
+        return (
+            ("R" if value & PF_R else "-")
+            + ("W" if value & PF_W else "-")
+            + ("X" if value & PF_X else "-")
+        )
 
 
-def flags_str(f: int) -> str:
-    return ("R" if f & PF_R else "-") + ("W" if f & PF_W else "-") + ("X" if f & PF_X else "-")
+class ElfDumper:
+    def __init__(self, elf: Elf, *, check: bool = False) -> None:
+        self._elf = elf
+        self._check = check
 
+    def _print_header(self) -> None:
+        h = self._elf.header
+        log.info("ELF header")
+        log.info("  type      %s (ET_EXEC)", h.e_type)
+        log.info("  machine   %s (RISC-V)", h.e_machine)
+        log.info("  entry     %#018x", h.e_entry)
+        log.info("  phoff     %#018x  shoff %#018x", h.e_phoff, h.e_shoff)
+        log.info("  phnum     %d  shnum %d  shstrndx %d",
+                 h.e_phnum, h.e_shnum, h.e_shstrndx)
 
-def dump(elf: Elf, check: bool) -> int:
-    h = elf.header
+    def _print_phdrs(self) -> None:
+        log.info("")
+        log.info("Program headers")
+        log.info("  %-8s %-8s %-16s %-16s %-10s %-10s %-6s %s",
+                 "TYPE", "OFFSET", "VADDR", "PADDR",
+                 "FILESZ", "MEMSZ", "FLAGS", "ALIGN")
+        for seg in self._elf.load_segments():
+            self._log_phdr_row(seg)
+        for ph in self._elf.phdrs:
+            if ph.p_type != 1:
+                self._log_phdr_row(ph)
 
-    print("ELF header")
-    print(f"  type      {h.e_type} (ET_EXEC)")
-    print(f"  machine   {h.e_machine} (RISC-V)")
-    print(f"  entry     {h.e_entry:#018x}")
-    print(f"  phoff     {h.e_phoff:#018x}  shoff {h.e_shoff:#018x}")
-    print(f"  phnum     {h.e_phnum}  shnum {h.e_shnum}  shstrndx {h.e_shstrndx}")
+    @staticmethod
+    def _log_phdr_row(ph) -> None:
+        log.info(
+            "  %-8s %-8x %#016x %#016x %-10x %-10x %s %#x",
+            Types.phdr(ph.p_type), ph.p_offset, ph.p_vaddr,
+            ph.p_paddr, ph.p_filesz, ph.p_memsz,
+            Types.flags(ph.p_flags), ph.p_align,
+        )
 
-    print("\nProgram headers")
-    print(f"  {'TYPE':<8} {'OFFSET':<8} {'VADDR':<16} {'PADDR':<16} "
-          f"{'FILESZ':<10} {'MEMSZ':<10} {'FLAGS':<6} ALIGN")
+    def _print_shdrs(self) -> None:
+        log.info("")
+        log.info("Sections")
+        log.info("  [%-3s] %-16s %-14s %-16s %-10s %-10s %s",
+                 "Nr", "NAME", "TYPE", "ADDR", "OFFSET", "SIZE", "FLAGS")
+        for idx, s in enumerate(self._elf.shdrs):
+            fl = (
+                ("X" if s.sh_flags & 1 else "-")
+                + ("W" if s.sh_flags & 2 else "-")
+                + ("A" if s.sh_flags & 4 else "-")
+            )
+            name = self._elf.section_name(s)
+            log.info("  [%3d] %-16s %-14s %#016x %#010x %#010x %s",
+                     idx, name, Types.shdr(s.sh_type),
+                     s.sh_addr, s.sh_offset, s.sh_size, fl)
 
-    def phdr_row(p) -> str:
-        return (f"  {phdr_type(p.p_type):<8} {p.p_offset:<8x} {p.p_vaddr:#016x} "
-                f"{p.p_paddr:#016x} {p.p_filesz:<10x} {p.p_memsz:<10x} "
-                f"{flags_str(p.p_flags)} {p.p_align:#x}")
-
-    for p in elf.load_segments():
-        print(phdr_row(p))
-    for p in elf.phdrs:
-        if p.p_type != 1:  # PT_LOAD already printed above
-            print(phdr_row(p))
-
-    print("\nSections")
-    print(f"  [{'Nr':<3}] {'NAME':<16} {'TYPE':<14} {'ADDR':<16} "
-          f"{'OFFSET':<10} {'SIZE':<10} FLAGS")
-
-    for i, s in enumerate(elf.shdrs):
-        fl = (("X" if s.sh_flags & 1 else "-") +
-              ("W" if s.sh_flags & 2 else "-") +
-              ("A" if s.sh_flags & 4 else "-"))
-        name = elf.section_name(s)
-        print(f"  [{i:>3}] {name:<16} {shdr_type(s.sh_type):<14} {s.sh_addr:#016x} "
-              f"{s.sh_offset:#010x} {s.sh_size:#010x} {fl}")
-
-    if check:
-        ok = elf.loadable_in(DRAM_BASE, DRAM_END)
-        print(f"\nVM check (DRAM {DRAM_BASE:#018x}..{DRAM_END:#018x}): "
-              f"{'OK' if ok else 'FAIL'}")
+    def _check_dram(self) -> int:
+        ok = self._elf.loadable_in(DRAM_BASE, DRAM_END)
+        log.info("")
+        log.info("VM check (DRAM %#018x..%#018x): %s",
+                 DRAM_BASE, DRAM_END, "OK" if ok else "FAIL")
         return 0 if ok else 1
-    return 0
+
+    def dump(self) -> int:
+        self._print_header()
+        self._print_phdrs()
+        self._print_shdrs()
+        if self._check:
+            return self._check_dram()
+        return 0
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--check", action="store_true",
-                    help="verify loadability into the VM DRAM window")
-    ap.add_argument("file", type=Path, help="ELF file to inspect")
-    args = ap.parse_args()
+    arg = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    arg.add_argument(
+        "--check", action="store_true",
+        help="verify loadability into VM DRAM window",
+    )
+    arg.add_argument("file", type=Path, help="ELF file to inspect")
+    args = arg.parse_args()
+
+    logging.basicConfig(format="%(message)s", level=logging.INFO)
 
     try:
         data = args.file.read_bytes()
     except OSError as e:
-        print(f"elfdump: cannot open '{args.file}': {e.strerror}", file=sys.stderr)
+        log.error("elfdump: cannot open '%s': %s", args.file, e.strerror)
         return 2
 
     try:
         elf = Elf.open(data)
     except ElfError as e:
-        print(f"elfdump: {e}", file=sys.stderr)
+        log.error("elfdump: %s", e)
         return 1
 
-    return dump(elf, args.check)
+    return ElfDumper(elf, check=args.check).dump()
 
 
 if __name__ == "__main__":

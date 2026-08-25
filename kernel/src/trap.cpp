@@ -27,14 +27,14 @@ const char *exception_name(types::u64 code) noexcept
     }
 }
 
-__attribute__((interrupt("machine")))
+__attribute__((interrupt("supervisor")))
 void trap_handler() noexcept
 {
     namespace csr = arch::rv64vm;
 
-    const auto cause = csr::csr_read<csr::Csr::Mcause>();
-    const auto epc   = csr::csr_read<csr::Csr::Mepc>();
-    const auto tval  = csr::csr_read<csr::Csr::Mtval>();
+    const auto cause = csr::csr_read<csr::Csr::Scause>();
+    const auto epc   = csr::csr_read<csr::Csr::Sepc>();
+    const auto tval  = csr::csr_read<csr::Csr::Stval>();
 
     constexpr types::u64 IntBit = types::u64{1} << 63;
 
